@@ -7,10 +7,10 @@
 - [ ] Id lookups via the cached catalog endpoints, persisted; missing mappings re-checked weekly
 - [ ] List reads gated on `updated_at`; never serve `[]` on an error
 - [ ] Anime lists split: series/OVA/ONA/special → Sonarr, films → Radarr
-- [ ] Container image (stdlib only, non-root, healthcheck) built by CI to ghcr.io/jad0083/simkl-bridge
+- [x] Container image (stdlib only, non-root, healthcheck) built by CI to ghcr.io/jad0083/simkl-bridge
 
 ## Release
-- [ ] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI
+- [x] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI (`b4bebf3ba486`, 2026-09-23)
 
 ## Later
 - [ ] Drop the tvdb lookup for Sonarr once v5 (imdbId in Custom List) reaches the `develop` image
