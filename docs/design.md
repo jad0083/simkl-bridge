@@ -97,6 +97,31 @@ with Sonarr and Radarr and be reached by container name
 it off public networks. `BRIDGE_LISTS` optionally restricts which list ids it
 will serve.
 
+**Change-driven syncs, not a faster poll.** Sonarr's Custom List has a
+hardcoded 6-hour minimum refresh, and Radarr's Custom Lists 12 hours
+(`MinRefreshInterval` in each list type). Both run their import-list task
+every 5 minutes and skip lists inside that window. `ImportListSyncCommand`
+with a `definitionId` goes through `FetchSingleList`, which has no interval
+check, so a targeted sync is honoured at any time. This was verified against
+a live Sonarr 4.0.20: `201`, then an immediate fetch from the bridge inside
+the window.
+
+The watcher therefore watches Simkl, not the clock. Each tick is one
+`/sync/activities` call. Its `custom_lists.lists.all` moves only when the
+token owner's lists change, and only then are the watched lists'
+`updated_at` values read. Lists owned by others never move it, so a full
+check runs hourly. On a change the cached list is dropped first, because the
+arr fetches immediately after the trigger. Then each definition pointing at
+that list is synced. The first sight of a list only records a baseline:
+saving a list in the arr already syncs it.
+
+Watcher failures are logged and retried next tick, and never touch serving.
+Arr API keys go only in the `X-Api-Key` header. Error responses are not
+echoed, because an arr's error page can quote the key. The alternative of
+emulating another Sonarr/Radarr (their own list types poll every 5/15
+minutes) was rejected: it means imitating an internal API that changes
+between versions.
+
 **Standard library only.** No runtime dependencies: `http.server`,
 `urllib.request`, `json`. There is nothing to pin or update beyond the Python
 base image.

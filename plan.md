@@ -9,6 +9,9 @@
 - [x] Anime lists split: series/OVA/ONA/special → Sonarr, films → Radarr
 - [x] Container image (stdlib only, non-root, healthcheck) built by CI to ghcr.io/jad0083/simkl-bridge
 
+## Faster syncs
+- [ ] Watch Simkl activity and request single-list syncs from Sonarr/Radarr on change, skipping their 6/12-hour Custom List floors (0.2.0)
+
 ## Release
 - [x] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI (`b4bebf3ba486`, 2026-09-23)
 

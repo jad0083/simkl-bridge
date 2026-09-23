@@ -58,6 +58,11 @@ class ListService:
             # feed would never re-check a mapping that was missing last week.
             return self._build(target, list_id, cached.items)
 
+    def invalidate(self, list_id):
+        """Forget a list, so the next request re-reads it in full."""
+        with self._lock:
+            self._lists.pop(list_id, None)
+
     def _current(self, list_id):
         now = self._clock()
         cached = self._lists.get(list_id)

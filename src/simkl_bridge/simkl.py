@@ -78,6 +78,10 @@ class Simkl:
             raise SimklError(f"{path}: read {len(items)} items, expected {expected}")
         return first, items
 
+    def activities(self):
+        """Last-change timestamps for the token owner's lists. The cheapest call there is."""
+        return self._get("/sync/activities", {}, auth=True)
+
     def detail_ids(self, kind, simkl_id):
         """External ids for one title, from the Cloudflare-cached catalog.
 

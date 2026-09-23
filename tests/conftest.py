@@ -52,6 +52,7 @@ class FakeSimkl:
             "query": dict(urllib.parse.parse_qsl(parts.query)),
             "headers": dict(headers or {}),
             "form": dict(urllib.parse.parse_qsl(data.decode())) if data else {},
+            "body": data.decode() if data else None,
         }
         self.requests.append(req)
         handler = self.routes.get((method, parts.path))

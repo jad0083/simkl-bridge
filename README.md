@@ -96,6 +96,34 @@ Press **Test**. A misconfigured list fails with a readable message instead of
 syncing nothing. For example, a movie list pointed at Sonarr, a non-PRO account,
 or an unknown list id.
 
+## Faster syncs (optional)
+
+Sonarr checks a Custom List at most every **6 hours**, and Radarr every
+**12 hours**. Those minimums are hardcoded per list type. A sync requested
+for one specific list skips them, though, and the bridge can request it for
+you. Give it each app's URL and API key, and it watches your Simkl lists.
+When one changes, it asks exactly the Sonarr/Radarr lists that point at it
+to re-read now. New titles then arrive within minutes of being added on
+simkl.com.
+
+```yaml
+    environment:
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY}
+```
+
+- **Discovery is automatic.** Any Sonarr *Custom List* or Radarr *Custom
+  Lists* entry whose URL ends in this bridge's `/sonarr/<id>` or
+  `/radarr/<id>` is watched. Nothing else is touched.
+- **Cheap.** Each check is a single `/sync/activities` call, which only moves
+  when one of your lists changes. Lists owned by someone else are checked in
+  full every hour, since your activity feed doesn't cover them.
+- **API keys are admin keys.** Neither app offers a read-only key. Treat them
+  like the Simkl token: from a secret store, never logged (the bridge doesn't).
+  Leave both unset to keep the bridge pull-only.
+
 ## Routes
 
 | Route | Returns |
@@ -115,6 +143,10 @@ or an unknown list id.
 | `BRIDGE_MIN_REFRESH` | no | `900` | seconds a list is served from cache before re-checking |
 | `BRIDGE_DATA_DIR` | no | `/data` | where the access token and id cache are kept (`0600`) |
 | `BRIDGE_PORT` | no | `8080` | |
+| `SONARR_URL`, `SONARR_API_KEY` | no | | enable change-driven syncs for Sonarr (both or neither) |
+| `RADARR_URL`, `RADARR_API_KEY` | no | | enable change-driven syncs for Radarr (both or neither) |
+| `BRIDGE_WATCH_INTERVAL` | no | `180` | seconds between change checks (minimum 30) |
+| `BRIDGE_FULL_CHECK` | no | `3600` | seconds between full checks of every watched list |
 
 ## Behaviour
 
