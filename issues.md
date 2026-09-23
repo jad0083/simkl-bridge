@@ -1,6 +1,7 @@
 # Issues
 
 ## Open
+- [ ] The watcher's startup log says `/sync/activities has no custom_lists.lists.all` when the field is present but `null`. Simkl leaves it `null` until the account's first list edit after the custom-list API went live. The watcher already handles it (hourly full checks until the stamp appears, then change-driven), but the message should say so rather than read like a fault (2026-09-23)
 - [ ] Simkl custom-list API is **beta**; response shape may change. Tests pin the documented shape as of 2026-09-23, not a live capture (2026-09-23)
 - [x] Not yet exercised against a real PRO token: the item/detail id field names come from the published OpenAPI examples (2026-09-23) — verified live 2026-09-23 against a VIP account: token refresh, `/lists/{id}` read and TVDB mapping all as documented
 - [ ] Lists over 10,000 items (possible for `auto` lists) are refused with a 502: Simkl's API cannot page past that, and serving the first 10,000 would read as removals (2026-09-23)
