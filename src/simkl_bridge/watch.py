@@ -23,6 +23,7 @@ from .http import urllib_transport
 
 # Where each app keeps a list's URL, and which bridge route it must point at.
 URL_FIELD = {"sonarr": "baseUrl", "radarr": "url"}
+ENABLED_FIELD = {"sonarr": "enableAutomaticAdd", "radarr": "enabled"}
 ROUTE = {name: re.compile(rf"/{name}/([0-9]+)/?$") for name in URL_FIELD}
 
 
@@ -47,9 +48,16 @@ class ArrClient:
         return r.json()
 
     def lists(self):
-        """(definition id, list URL) for every import list, enabled or not."""
+        """(app, definition id, list URL) for every import list the app would actually sync.
+
+        Each app skips a disabled list in a targeted sync anyway (Sonarr on
+        `enableAutomaticAdd`, Radarr on `enabled`); filtering here keeps the
+        watcher from even asking.
+        """
         out = []
         for item in self._call("GET", "/api/v3/importlist") or []:
+            if not item.get(ENABLED_FIELD[self.name]):
+                continue
             fields = {f.get("name"): f.get("value") for f in item.get("fields") or []}
             out.append((self.name, item.get("id"), fields.get(URL_FIELD[self.name]) or ""))
         return out
@@ -70,7 +78,16 @@ def lists_by_simkl_id(entries):
 
 
 class Watcher:
-    def __init__(self, simkl, service, arrs, clock=time.time, full_every=3600, log=print):
+    """One tick: discover targets, read Simkl's activity stamp, and sync what moved.
+
+    State is kept per (app, definition), not per list, so a list feeding both
+    apps is not marked done for one while the other was unreachable. Anything
+    that fails -- a list read, a sync, an app that was down -- makes the next
+    tick check again, rather than waiting for the next activity change or the
+    hourly full check.
+    """
+
+    def __init__(self, simkl, service, arrs, clock=time.monotonic, full_every=3600, log=print):
         self._simkl = simkl
         self._service = service
         self.arrs = arrs
@@ -79,55 +96,90 @@ class Watcher:
         self._log = log
         self._activity = None
         self._last_full = None
-        self._seen = {}          # simkl list id -> updated_at at last check
+        self._synced = {}          # (app, definition id) -> list updated_at last synced or baselined
+        self._retry = False
+        self._unreachable = set()
+        self._warned_no_activity = False
 
     def tick(self):
-        targets = self._discover()
+        targets, recovered = self._discover()
         try:
             activity = self._simkl.activities()
         except Exception as e:  # noqa: BLE001 -- retried next tick
             self._log(f"watch: Simkl activities unavailable, skipping this tick: {e}")
             return
         now = self._clock()
-        moved = (((activity.get("custom_lists") or {}).get("lists") or {}).get("all"))
-        first = self._activity is None
+        moved = ((activity.get("custom_lists") or {}).get("lists") or {}).get("all")
+        if moved is None and not self._warned_no_activity:
+            self._warned_no_activity = True
+            self._log("watch: /sync/activities has no custom_lists.lists.all; "
+                      "falling back to the full check alone")
+        activity_moved = moved is not None and moved != self._activity
         full_due = self._last_full is None or now - self._last_full >= self._full_every
-        if not first and moved == self._activity and not full_due:
+        unseen = any((arr.name, d) not in self._synced for where in targets.values() for arr, d in where)
+        if not (activity_moved or full_due or unseen or recovered or self._retry):
             return
-        self._activity = moved
-        if full_due:
-            self._last_full = now
+
+        ok = True
         for list_id, where in sorted(targets.items()):
             try:
                 updated = self._simkl.list_meta(list_id).get("updated_at")
             except Exception as e:  # noqa: BLE001
                 self._log(f"watch: list {list_id} unreadable, will retry: {e}")
+                ok = False
                 continue
-            before = self._seen.get(list_id)
-            self._seen[list_id] = updated
-            if before is None or before == updated:
-                continue
-            self._service.invalidate(list_id)
+            invalidated = False
             for arr, definition in where:
+                key = (arr.name, definition)
+                if key not in self._synced:
+                    # First sight: saving the list in the app already synced it.
+                    self._synced[key] = updated
+                    continue
+                if self._synced[key] == updated:
+                    continue
+                if not invalidated:
+                    # The app fetches right after the trigger; it must not get the old copy.
+                    self._service.invalidate(list_id)
+                    invalidated = True
                 try:
                     arr.sync(definition)
-                    self._log(f"watch: list {list_id} changed; {arr.name} list #{definition} sync requested")
                 except Exception as e:  # noqa: BLE001
                     self._log(f"watch: list {list_id} changed; {arr.name} list #{definition} "
-                              f"sync failed, will retry on the next change: {e}")
+                              f"sync failed, will retry: {e}")
+                    ok = False
+                    continue
+                self._synced[key] = updated
+                self._log(f"watch: list {list_id} changed; {arr.name} list #{definition} sync requested")
+
+        # Only a complete pass consumes the activity change or the full check.
+        self._retry = not ok
+        if ok:
+            if moved is not None:
+                self._activity = moved
+            if full_due:
+                self._last_full = now
 
     def _discover(self):
-        """{simkl list id: [(arr, definition id)]} across every reachable arr."""
-        out = {}
+        """({simkl list id: [(app, definition id)]}, whether an app just came back)."""
+        out, recovered = {}, False
         for arr in self.arrs:
             try:
                 found = lists_by_simkl_id(arr.lists())
             except Exception as e:  # noqa: BLE001
-                self._log(f"watch: {arr.name} unreachable: {e}")
+                if arr.name not in self._unreachable:
+                    self._log(f"watch: {arr.name} unreachable, will retry: {e}")
+                self._unreachable.add(arr.name)
                 continue
+            if arr.name in self._unreachable:
+                # Changes made while it was down were never compared for it.
+                self._unreachable.discard(arr.name)
+                recovered = True
+                self._log(f"watch: {arr.name} reachable again")
             for list_id, definitions in found.items():
+                if not self._service.allows(list_id):
+                    continue
                 out.setdefault(list_id, []).extend((arr, d) for d in definitions)
-        return out
+        return out, recovered
 
     def run(self, interval, stop=None):
         stop = stop or threading.Event()

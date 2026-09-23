@@ -199,3 +199,86 @@ def test_api_keys_never_reach_the_log(world):
     world.sonarr.json("POST", "/api/v3/command", {"message": "SKEY is wrong"}, status=400)
     world.watcher.tick()
     assert not any("SKEY" in m or "RKEY" in m for m in world.logs)
+
+
+# --- review findings ------------------------------------------------------------------------
+
+def test_first_edit_to_a_list_added_after_startup_is_triggered(world):
+    """A brand-new Simkl list that nothing watched before."""
+    world.updated[99] = "n1"
+    world.fake.on("GET", "/lists/99", world._list(99))
+    world.watcher.tick()
+    world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists(
+        "http://simkl-bridge:8080/sonarr/152642", "http://simkl-bridge:8080/sonarr/99"))
+    world.clock.now += 180
+    world.watcher.tick()                       # first sight of list 99, activity unchanged
+    world.activity, world.updated[99] = "moved", "n2"
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [11]
+
+
+def test_a_failed_list_read_is_retried_next_tick_not_next_hour(world):
+    world.watcher.tick()
+    real = world.fake.routes[("GET", "/lists/152642")]
+    world.fake.json("GET", "/lists/152642", {"error": "boom"}, status=503)
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == []
+    world.fake.on("GET", "/lists/152642", real)
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10]
+
+
+def test_an_arr_that_was_down_still_gets_its_trigger(world):
+    """A list feeding both apps: the one that was unreachable must not lose the change."""
+    world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists("http://simkl-bridge:8080/sonarr/7"))
+    world.watcher.tick()
+    world.sonarr.json("POST", "/api/v3/command", {}, status=503)
+    world.activity, world.updated[7] = "moved", "v2"
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.radarr) == [20]
+    failed = len(world.sonarr.calls("/api/v3/command"))
+    world.sonarr.json("POST", "/api/v3/command", {"id": 2}, status=201)
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr)[failed:] == [10], "the change was dropped for the app that was down"
+    assert world.syncs(world.radarr) == [20], "radarr must not be triggered twice"
+
+
+def test_missing_activity_field_falls_back_to_hourly_not_every_tick(world):
+    world.fake.on("GET", "/sync/activities", lambda r: (200, {"all": "x"}))
+    world.watcher.tick()
+    before = len(world.fake.calls("/lists/152642"))
+    for _ in range(5):
+        world.clock.now += 180
+        world.watcher.tick()
+    assert len(world.fake.calls("/lists/152642")) == before
+    assert sum("custom_lists" in m for m in world.logs) == 1, "say so once, not every tick"
+
+
+def test_disabled_arr_lists_are_not_triggered(world, sonarr):
+    lists = sonarr_lists("http://simkl-bridge:8080/sonarr/152642", enabled=False)
+    world.sonarr.json("GET", "/api/v3/importlist", lists)
+    world.watcher.tick()
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == []
+
+
+def test_radarr_disabled_uses_its_own_field(radarr):
+    radarr.json("GET", "/api/v3/importlist", [
+        {"id": 20, "enabled": False, "fields": [{"name": "url", "value": "http://b/radarr/5"}]},
+        {"id": 21, "enabled": True, "fields": [{"name": "url", "value": "http://b/radarr/6"}]}])
+    arr = ArrClient("radarr", "http://radarr:7878", "K", transport=radarr)
+    assert lists_by_simkl_id(arr.lists()) == {6: [21]}
+
+
+def test_lists_outside_bridge_lists_are_not_watched(world):
+    world.service._allowed = {7}
+    world.watcher.tick()
+    assert world.fake.calls("/lists/152642") == []

@@ -120,6 +120,12 @@ simkl.com.
 - **Cheap.** Each check is a single `/sync/activities` call, which only moves
   when one of your lists changes. Lists owned by someone else are checked in
   full every hour, since your activity feed doesn't cover them.
+- **Disabled lists are left alone**, as are lists outside `BRIDGE_LISTS`.
+  A change that can't be completed (Simkl unreachable, an app down, a sync
+  rejected) is retried on the next check, not dropped.
+- **Library cleaning.** A triggered Sonarr sync runs Sonarr's *Clean Library*
+  step if you have it enabled, the same as its scheduled sync does. The bridge
+  never serves a partial list, so cleaning only ever sees the complete list.
 - **API keys are admin keys.** Neither app offers a read-only key. Treat them
   like the Simkl token: from a secret store, never logged (the bridge doesn't).
   Leave both unset to keep the bridge pull-only.

@@ -46,7 +46,7 @@ class ListService:
         self._log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
 
     def feed(self, target, list_id):
-        if self._allowed is not None and list_id not in self._allowed:
+        if not self.allows(list_id):
             raise Forbidden(f"list {list_id} is not in BRIDGE_LISTS")
         with self._lock:
             cached = self._current(list_id)
@@ -57,6 +57,10 @@ class ListService:
             # Rebuilt every time: the id cache makes it cheap, and a memoised
             # feed would never re-check a mapping that was missing last week.
             return self._build(target, list_id, cached.items)
+
+    def allows(self, list_id):
+        """Whether BRIDGE_LISTS (if set) permits this list."""
+        return self._allowed is None or list_id in self._allowed
 
     def invalidate(self, list_id):
         """Forget a list, so the next request re-reads it in full."""

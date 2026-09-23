@@ -115,6 +115,15 @@ arr fetches immediately after the trigger. Then each definition pointing at
 that list is synced. The first sight of a list only records a baseline:
 saving a list in the arr already syncs it.
 
+State is kept per (app, list definition), not per Simkl list. Otherwise a
+list feeding both apps would be marked done for one while the other was down.
+A pass counts only if it completes: a failed list read, a rejected sync, or an
+app coming back from being unreachable makes the next tick check again. The
+activity change is consumed only by a complete pass. A list seen for the
+first time is checked immediately, whatever the activity stamp says, so its
+first edit is not missed. Timing uses a monotonic clock. Disabled definitions
+and lists outside `BRIDGE_LISTS` are never watched.
+
 Watcher failures are logged and retried next tick, and never touch serving.
 Arr API keys go only in the `X-Api-Key` header. Error responses are not
 echoed, because an arr's error page can quote the key. The alternative of
