@@ -89,6 +89,7 @@ class World:
         self.service = ListService(self.simkl, Resolver(self.simkl, IdCache(tmp_path / "i.json", clock=clock),
                                                         clock=clock), clock=clock)
         self.logs = []
+        self.marks = {}
         self.watcher = Watcher(self.simkl, self.service,
                                [ArrClient("sonarr", "http://sonarr:8989", "SKEY", transport=sonarr),
                                 ArrClient("radarr", "http://radarr:7878", "RKEY", transport=radarr)],
@@ -102,7 +103,14 @@ class World:
         return handler
 
     def syncs(self, arr):
-        return [json.loads(r["body"])["definitionId"] for r in arr.calls("/api/v3/command")]
+        """Syncs requested since start() -- the start-up catch-up pass is not counted."""
+        calls = arr.calls("/api/v3/command")[self.marks.get(id(arr), 0):]
+        return [json.loads(r["body"])["definitionId"] for r in calls]
+
+    def start(self):
+        """First tick (which syncs every list once, as a catch-up), then count from here."""
+        self.watcher.tick()
+        self.marks = {id(a): len(a.calls("/api/v3/command")) for a in (self.sonarr, self.radarr)}
 
 
 @pytest.fixture
@@ -110,13 +118,15 @@ def world(tmp_path, fake, clock, sonarr, radarr):
     return World(tmp_path, fake, clock, sonarr, radarr)
 
 
-def test_first_tick_only_records_a_baseline(world):
+def test_first_sight_of_each_list_syncs_it(world):
+    """Sonarr does not sync a list when it is added, only when edited; a restart may
+    also have missed changes. So every definition is synced once when first seen."""
     world.watcher.tick()
-    assert world.syncs(world.sonarr) == [] and world.syncs(world.radarr) == []
+    assert world.syncs(world.sonarr) == [10] and world.syncs(world.radarr) == [20]
 
 
 def test_nothing_changed_costs_one_activities_call(world):
-    world.watcher.tick()
+    world.start()
     before = len(world.fake.requests)
     world.clock.now += 180
     world.watcher.tick()
@@ -125,7 +135,7 @@ def test_nothing_changed_costs_one_activities_call(world):
 
 
 def test_a_changed_list_syncs_exactly_its_definition(world):
-    world.watcher.tick()
+    world.start()
     world.activity, world.updated[152642] = "2026-09-23T01:00:00Z", "u2"
     world.clock.now += 180
     world.watcher.tick()
@@ -141,7 +151,7 @@ def test_a_change_invalidates_the_cached_list(world):
         "pagination": {"page": 1, "limit": 500, "total_items": 0, "total_pages": 1}, "items": []}))
     world.service.feed("sonarr", 152642)
     reads = len(world.fake.calls("/lists/152642"))
-    world.watcher.tick()
+    world.start()
     world.activity, world.updated[152642] = "later", "u2"
     world.watcher.tick()
     world.service.feed("sonarr", 152642)          # within min_refresh: would be cached
@@ -151,7 +161,7 @@ def test_a_change_invalidates_the_cached_list(world):
 
 def test_foreign_lists_are_still_checked_hourly(world):
     """/sync/activities only moves for the token owner's own lists."""
-    world.watcher.tick()
+    world.start()
     world.updated[7] = "v2"                       # changed, activity did not move
     world.clock.now += 600
     world.watcher.tick()
@@ -161,21 +171,21 @@ def test_foreign_lists_are_still_checked_hourly(world):
     assert world.syncs(world.radarr) == [20]
 
 
-def test_a_newly_added_arr_list_is_baselined_not_triggered(world):
-    """Saving a list in the arr already syncs it; a second trigger would be noise."""
-    world.watcher.tick()
+def test_a_list_added_to_sonarr_later_is_synced_on_sight(world):
+    """Sonarr would otherwise wait for its 5-minute scheduler, or longer."""
+    world.start()
     world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists(
         "http://simkl-bridge:8080/sonarr/152642", "http://simkl-bridge:8080/sonarr/7"))
-    world.activity = "moved"
+    world.clock.now += 180
     world.watcher.tick()
-    assert world.syncs(world.sonarr) == []
+    assert world.syncs(world.sonarr) == [11]
 
 
 def test_an_unreachable_arr_does_not_stop_the_other(world):
     def down(*a, **k):
         raise OSError("connection refused")
     world.watcher.arrs[0].transport = down
-    world.watcher.tick()
+    world.start()
     world.activity, world.updated[7] = "moved", "v2"
     world.watcher.tick()
     assert world.syncs(world.radarr) == [20]
@@ -183,7 +193,7 @@ def test_an_unreachable_arr_does_not_stop_the_other(world):
 
 
 def test_a_simkl_failure_skips_the_tick_and_keeps_the_baseline(world):
-    world.watcher.tick()
+    world.start()
     world.fake.json("GET", "/sync/activities", {"error": "boom"}, status=503)
     world.watcher.tick()
     world.fake.on("GET", "/sync/activities",
@@ -194,7 +204,7 @@ def test_a_simkl_failure_skips_the_tick_and_keeps_the_baseline(world):
 
 
 def test_api_keys_never_reach_the_log(world):
-    world.watcher.tick()
+    world.start()
     world.activity, world.updated[152642], world.updated[7] = "moved", "u2", "v2"
     world.sonarr.json("POST", "/api/v3/command", {"message": "SKEY is wrong"}, status=400)
     world.watcher.tick()
@@ -207,7 +217,7 @@ def test_first_edit_to_a_list_added_after_startup_is_triggered(world):
     """A brand-new Simkl list that nothing watched before."""
     world.updated[99] = "n1"
     world.fake.on("GET", "/lists/99", world._list(99))
-    world.watcher.tick()
+    world.start()
     world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists(
         "http://simkl-bridge:8080/sonarr/152642", "http://simkl-bridge:8080/sonarr/99"))
     world.clock.now += 180
@@ -215,11 +225,11 @@ def test_first_edit_to_a_list_added_after_startup_is_triggered(world):
     world.activity, world.updated[99] = "moved", "n2"
     world.clock.now += 180
     world.watcher.tick()
-    assert world.syncs(world.sonarr) == [11]
+    assert world.syncs(world.sonarr) == [11, 11], "synced on sight, then again for the edit"
 
 
 def test_a_failed_list_read_is_retried_next_tick_not_next_hour(world):
-    world.watcher.tick()
+    world.start()
     real = world.fake.routes[("GET", "/lists/152642")]
     world.fake.json("GET", "/lists/152642", {"error": "boom"}, status=503)
     world.activity, world.updated[152642] = "moved", "u2"
@@ -235,13 +245,13 @@ def test_a_failed_list_read_is_retried_next_tick_not_next_hour(world):
 def test_an_arr_that_was_down_still_gets_its_trigger(world):
     """A list feeding both apps: the one that was unreachable must not lose the change."""
     world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists("http://simkl-bridge:8080/sonarr/7"))
-    world.watcher.tick()
+    world.start()
     world.sonarr.json("POST", "/api/v3/command", {}, status=503)
     world.activity, world.updated[7] = "moved", "v2"
     world.clock.now += 180
     world.watcher.tick()
     assert world.syncs(world.radarr) == [20]
-    failed = len(world.sonarr.calls("/api/v3/command"))
+    failed = len(world.syncs(world.sonarr))
     world.sonarr.json("POST", "/api/v3/command", {"id": 2}, status=201)
     world.clock.now += 180
     world.watcher.tick()
@@ -251,7 +261,7 @@ def test_an_arr_that_was_down_still_gets_its_trigger(world):
 
 def test_missing_activity_field_falls_back_to_hourly_not_every_tick(world):
     world.fake.on("GET", "/sync/activities", lambda r: (200, {"all": "x"}))
-    world.watcher.tick()
+    world.start()
     before = len(world.fake.calls("/lists/152642"))
     for _ in range(5):
         world.clock.now += 180
@@ -263,7 +273,7 @@ def test_missing_activity_field_falls_back_to_hourly_not_every_tick(world):
 def test_disabled_arr_lists_are_not_triggered(world, sonarr):
     lists = sonarr_lists("http://simkl-bridge:8080/sonarr/152642", enabled=False)
     world.sonarr.json("GET", "/api/v3/importlist", lists)
-    world.watcher.tick()
+    world.start()
     world.activity, world.updated[152642] = "moved", "u2"
     world.clock.now += 180
     world.watcher.tick()
@@ -280,5 +290,5 @@ def test_radarr_disabled_uses_its_own_field(radarr):
 
 def test_lists_outside_bridge_lists_are_not_watched(world):
     world.service._allowed = {7}
-    world.watcher.tick()
+    world.start()
     assert world.fake.calls("/lists/152642") == []
