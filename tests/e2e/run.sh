@@ -37,5 +37,12 @@ done
 mkdir -p "$E2E_DIR/tv" "$E2E_DIR/movies"
 chmod -R a+rwX "$E2E_DIR"
 
-docker compose up -d --build --quiet-pull
+# Registries (lscr.io, ghcr.io) have transient TLS and timeout failures;
+# an image that can't be fetched is not a test result, so pulls are retried.
+for attempt in 1 2 3 4; do
+  docker compose pull --quiet --ignore-buildable && break
+  [ "$attempt" = 4 ] && { echo "image pull failed 4 times" >&2; exit 1; }
+  sleep $((attempt * 15))
+done
+docker compose up -d --build
 "${PYTHON:-python3}" -m pytest -q -p no:cacheprovider -o addopts="" -s test_e2e.py "$@"
