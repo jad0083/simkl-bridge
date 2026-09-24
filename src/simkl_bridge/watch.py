@@ -29,6 +29,9 @@ ROUTE = {name: re.compile(rf"/{name}/([0-9]+)/?$") for name in URL_FIELD}
 # The app's own retry would wait out its 6h/12h minimum, measured from its
 # last successful sync.
 REDELIVER_AFTER = 120
+# After this many unanswered re-requests, stop and say so, rather than asking
+# every tick forever (e.g. if an app's fetches can't be recognised).
+MAX_REDELIVERIES = 5
 
 
 class ArrClient:
@@ -104,7 +107,7 @@ class Watcher:
         self._retry = False
         self._unreachable = set()
         self._warned_no_activity = False
-        self._pending = {}         # (app, definition) -> (arr, list id, serves at request, requested at)
+        self._pending = {}         # (app, definition) -> (arr, list id, serves at request, requested at, attempts)
 
     def tick(self):
         targets, recovered = self._discover()
@@ -157,7 +160,7 @@ class Watcher:
                     ok = False
                     continue
                 self._synced[key] = updated
-                self._pending[key] = (arr, list_id, seen, self._clock())
+                self._pending[key] = (arr, list_id, seen, self._clock(), 0)
                 self._log(f"watch: list {list_id} {why}; {arr.name} list #{definition} sync requested")
 
         # Only a complete pass consumes the activity change or the full check.
@@ -177,11 +180,17 @@ class Watcher:
         that app since the request.
         """
         now = self._clock()
-        for key, (arr, list_id, seen, at) in list(self._pending.items()):
+        for key, (arr, list_id, seen, at, attempts) in list(self._pending.items()):
             if self._service.serves(arr.name, list_id) > seen:
                 del self._pending[key]
                 continue
             if now - at < REDELIVER_AFTER:
+                continue
+            if attempts >= MAX_REDELIVERIES:
+                del self._pending[key]
+                self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} still hasn't fetched after "
+                          f"{attempts} re-requests; giving up until the list next changes. "
+                          f"Check {arr.name}'s own log for why its fetch fails")
                 continue
             seen = self._service.serves(arr.name, list_id)
             try:
@@ -190,7 +199,7 @@ class Watcher:
                 self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
                           f"the sync request, and asking again failed, will retry: {e}")
                 continue
-            self._pending[key] = (arr, list_id, seen, now)
+            self._pending[key] = (arr, list_id, seen, now, attempts + 1)
             self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
                       f"the sync request, asking again")
 

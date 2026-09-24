@@ -178,3 +178,18 @@ def test_a_movie_list_offered_to_sonarr_is_refused_with_a_reason(ready):
                        seasonFolder=True, monitorNewItems="all")
     status, data = arr(SONARR, "POST", "/importlist/test", body, expect=None)
     assert status >= 400, f"Sonarr accepted a movie list: {data}"
+
+
+def test_zz_real_apps_fetches_confirm_their_syncs():
+    """Delivery is confirmed only by the app's own fetch, recognised by its
+    User-Agent. If real Sonarr/Radarr weren't recognised, every sync would be
+    re-requested; this proves they are."""
+    import subprocess
+    logs = subprocess.run(["docker", "compose", "logs", "--no-color", "simkl-bridge"],
+                          capture_output=True, text=True, check=True,
+                          cwd=os.path.dirname(__file__)).stdout
+    assert "sync requested" in logs, "the watcher never requested a sync"
+    assert "asking again" not in logs, "a real app's fetch was not recognised:\n" + "\n".join(
+        line for line in logs.splitlines() if "watch:" in line)
+    assert "[Sonarr/" in logs and "[Radarr/" in logs, "expected fetches identified as Sonarr and Radarr"
+

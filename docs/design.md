@@ -134,7 +134,14 @@ follows, which can fail: a Simkl error makes the bridge answer an error,
 correctly. The app's own retry then waits out its 6 h / 12 h minimum,
 because that is measured from its last *successful* sync. So each accepted
 request stays pending until the bridge has served that list whole to that
-app. The count of successful serves is read before the request is sent,
+app, and *only to the app itself*. A fetch counts only if its `User-Agent`
+names the app: Sonarr and Radarr send `Sonarr/<version> (…)` and
+`Radarr/<version> (…)`, captured from real instances in the end-to-end suite.
+Otherwise a person pressing Test or running `curl` at the wrong moment
+confirms a sync the app's own fetch missed. The soak showed exactly this with
+its polling client. Re-requests stop after five with a log line, so an app
+whose fetches can't be recognised is reported rather than asked forever. The
+end-to-end suite asserts real apps are recognised. The count of successful serves is read before the request is sent,
 because an app can fetch before the request returns. A request still unmet
 after two minutes is sent again on the next tick. That costs no Simkl call.
 The nightly soak found this: one edit in a 25%-fault run was accepted and

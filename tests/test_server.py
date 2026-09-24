@@ -16,7 +16,7 @@ class StubService:
         self.outcome = outcome
         self.calls = []
 
-    def feed(self, target, list_id):
+    def feed(self, target, list_id, from_app=True):
         self.calls.append((target, list_id))
         if isinstance(self.outcome, Exception):
             raise self.outcome
@@ -126,3 +126,20 @@ def test_end_to_end_with_the_real_service(tmp_path, fake, clock):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.mark.parametrize("agent,counts", [
+    ("Sonarr/4.0.20.3014 (alpine 3.24.1)", True),       # the real header, captured in e2e
+    ("sonarr/5.0", True),
+    ("Radarr/6.4.4.10685 (alpine 3.24.2)", False),      # the other app
+    ("curl/8.10.1", False),                             # a person checking by hand
+    ("Python-urllib/3.13", False),
+])
+def test_only_the_app_itself_counts_as_a_delivery(serve, agent, counts):
+    """A user's curl or poll must not confirm a sync the app's own fetch missed."""
+    svc, base = serve([])
+    seen = []
+    svc.feed = lambda target, list_id, from_app=True: seen.append(from_app) or []
+    req = urllib.request.Request(base + "/sonarr/7", headers={"User-Agent": agent})
+    urllib.request.urlopen(req, timeout=5).read()
+    assert seen == [counts]

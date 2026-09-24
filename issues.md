@@ -1,7 +1,7 @@
 # Issues
 
 ## Open
-- [ ] An accepted sync whose follow-up fetch failed was never retried, leaving the title to the app's own retry 6-12 h later (Sonarr/Radarr measure it from their last *successful* sync). Found by the CI soak at a 25% Simkl fault rate: one edit accepted, never delivered. Fixed in 0.3.1: delivery is confirmed by the app's successful fetch, and unconfirmed syncs are requested again (2026-09-24)
+- [ ] An accepted sync whose follow-up fetch failed was never retried, leaving the title to the app's own retry 6-12 h later (Sonarr/Radarr measure it from their last *successful* sync). Found by the CI soak at a 25% Simkl fault rate: one edit accepted, never delivered. Fixed in 0.3.1: delivery is confirmed by the app's own successful fetch (recognised by its User-Agent, so a user's Test or curl can't stand in for it), and unconfirmed syncs are requested again, at most five times (2026-09-24)
 - [ ] The develop-build e2e leg failed on a registry TLS timeout pulling `lscr.io/linuxserver/sonarr:develop`, not on the bridge; the e2e runner now retries image pulls (2026-09-24)
 - [x] A new Sonarr list waited for Sonarr's scheduler (up to its next 5-minute run): Sonarr syncs a list on edit, not on add, and the watcher treated first sight as a baseline. Found by the end-to-end suite; fixed by syncing each definition on first sight (released in 0.3.0) (2026-09-24)
 - [x] `python -m simkl_bridge auth` crashed with a traceback when Simkl was unreachable; now a one-line error (released in 0.3.0) (2026-09-24)

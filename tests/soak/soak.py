@@ -55,9 +55,12 @@ def free_port():
         return s.getsockname()[1]
 
 
-def http(method, url, body=None, timeout=60):
+def http(method, url, body=None, timeout=60, agent=None):
+    headers = {"Content-Type": "application/json"}
+    if agent:
+        headers["User-Agent"] = agent
     req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Content-Type": "application/json"})
+                                 headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read() or b"null")
@@ -100,9 +103,11 @@ class Versions:
 class FakeArr:
     """Enough of Sonarr/Radarr for the watcher: import lists, and sync-on-command."""
 
-    def __init__(self, name, bridge, list_id, versions, failures):
+    def __init__(self, name, bridge, list_id, versions, failures, fetch_fail=0.0):
         self.name, self.bridge, self.list_id = name, bridge, list_id
         self.versions, self.failures = versions, failures
+        self.fetch_fail = fetch_fail           # share of accepted syncs whose fetch never happens
+        self.dropped = 0
         self.fetches = []                    # (time, version index) of each successful fetch
         self.disabled_synced = 0
         self.lock = threading.Lock()
@@ -114,7 +119,10 @@ class FakeArr:
         ]
 
     def fetch(self):
-        status, body = http("GET", f"{self.bridge}/{self.name}/{self.list_id}")
+        # Identify as the real apps do, so the bridge counts this as the app's
+        # own fetch; the poller below does not, like a person running curl.
+        agent = f"{self.name.capitalize()}/soak (test)"
+        status, body = http("GET", f"{self.bridge}/{self.name}/{self.list_id}", agent=agent)
         if status != 200:
             return
         key = "tvdbId" if self.name == "sonarr" else "id"
@@ -154,7 +162,10 @@ class FakeArr:
                 if self.path == "/api/v3/command" and body.get("name") == "ImportListSync":
                     if body.get("definitionId") == 2:
                         arr.disabled_synced += 1
-                    threading.Thread(target=arr.fetch, daemon=True).start()
+                    if random.random() < arr.fetch_fail:
+                        arr.dropped += 1       # accepted, but the app's fetch is lost
+                    else:
+                        threading.Thread(target=arr.fetch, daemon=True).start()
                     return self._send(201, {"id": 1, "name": "ImportListSync"})
                 return self._send(404, {})
 
@@ -166,6 +177,8 @@ def main():
     ap.add_argument("--minutes", type=float, default=5)
     ap.add_argument("--fault-rate", type=float, default=0.15)
     ap.add_argument("--edit-every", type=float, default=20)
+    ap.add_argument("--app-fetch-fail", type=float, default=0.0,
+                    help="share of accepted syncs whose follow-up fetch is lost")
     a = ap.parse_args()
     random.seed(os.environ.get("SOAK_SEED", "simkl-bridge"))
     failures, versions = [], Versions()
@@ -185,7 +198,7 @@ def main():
 
     arrs = {}
     for name, lid in (("sonarr", TV), ("radarr", MOVIES)):
-        arr = FakeArr(name, bridge, lid, versions, failures)
+        arr = FakeArr(name, bridge, lid, versions, failures, a.app_fetch_fail)
         port = free_port()
         s = ThreadingHTTPServer(("127.0.0.1", port), arr.handler())
         threading.Thread(target=s.serve_forever, daemon=True).start()
@@ -314,6 +327,7 @@ def main():
         "threads_max": max((s[2] for s in samples), default=None),
         "watch_log_lines": sum(1 for line in output.splitlines() if line.startswith("watch:")),
         "redeliveries": sum(1 for line in output.splitlines() if "asking again" in line),
+        "app_fetches_dropped": sum(arr.dropped for arr, _ in arrs.values()),
         "failures": failures[:50],
     }
     print(json.dumps(report, indent=2))

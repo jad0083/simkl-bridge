@@ -381,3 +381,33 @@ def test_redelivery_does_not_need_the_activity_stamp_to_move(world):
     simkl_paths = [r["path"] for r in world.fake.requests[before:]]
     assert simkl_paths == ["/sync/activities"]
     assert world.syncs(world.sonarr) == [10, 10]
+
+
+def test_a_fetch_by_someone_else_does_not_confirm_delivery(world):
+    """A person pressing Test or running curl gets the list; the app still hasn't."""
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    world.fake.on("GET", "/lists/152642", lambda r: (200, {
+        "id": 152642, "media_type": "anime", "updated_at": "u2",
+        "pagination": {"page": 1, "limit": 500, "total_items": 0, "total_pages": 1}, "items": []}))
+    world.service.feed("sonarr", 152642, from_app=False)
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10, 10]
+
+
+def test_redelivery_gives_up_after_a_bounded_number_of_attempts(world):
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    for _ in range(12):
+        world.clock.now += 180
+        world.watcher.tick()
+    from simkl_bridge.watch import MAX_REDELIVERIES
+    assert world.syncs(world.sonarr) == [10] * (1 + MAX_REDELIVERIES)
+    assert sum("giving up" in m for m in world.logs) == 1
