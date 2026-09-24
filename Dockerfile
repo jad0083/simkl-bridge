@@ -5,8 +5,12 @@ WORKDIR /app
 COPY src/simkl_bridge /app/simkl_bridge
 
 # Unprivileged, with state (access token, id cache) in a volume it owns.
+# pip is removed: the bridge needs only the standard library, and pip's
+# vendored packages are the image's only known vulnerabilities.
 RUN useradd --system --uid 10001 --no-create-home bridge \
- && mkdir /data && chown bridge /data && chmod 0700 /data
+ && mkdir /data && chown bridge /data && chmod 0700 /data \
+ && rm -rf /usr/local/lib/python3.*/site-packages/pip* /usr/local/lib/python3.*/ensurepip \
+           /usr/local/bin/pip*
 USER 10001
 VOLUME /data
 
