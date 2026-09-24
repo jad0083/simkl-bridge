@@ -35,11 +35,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Tagged by short commit: a deployment pinned to tag + digest then
-      # records which commit it runs.
+      # Three tags per push to main: the short commit, so a deployment pinned
+      # to tag + digest records exactly which code it runs; the package
+      # version; and latest, for anyone who just wants the current build.
       - id: tag
-        run: echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/simkl_bridge/__init__.py)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.sha }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.sha }}
+            ghcr.io/${{ github.repository }}:v${{ steps.tag.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=simkl-bridge
+            org.opencontainers.image.description=Import Simkl custom lists into Sonarr and Radarr, with change-driven syncs
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.version }}
