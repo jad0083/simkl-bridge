@@ -25,6 +25,10 @@ from .http import urllib_transport
 URL_FIELD = {"sonarr": "baseUrl", "radarr": "url"}
 ENABLED_FIELD = {"sonarr": "enableAutomaticAdd", "radarr": "enabled"}
 ROUTE = {name: re.compile(rf"/{name}/([0-9]+)/?$") for name in URL_FIELD}
+# An accepted sync the app hasn't fetched after this long is requested again.
+# The app's own retry would wait out its 6h/12h minimum, measured from its
+# last successful sync.
+REDELIVER_AFTER = 120
 
 
 class ArrClient:
@@ -100,9 +104,11 @@ class Watcher:
         self._retry = False
         self._unreachable = set()
         self._warned_no_activity = False
+        self._pending = {}         # (app, definition) -> (arr, list id, serves at request, requested at)
 
     def tick(self):
         targets, recovered = self._discover()
+        self._redeliver()
         try:
             activity = self._simkl.activities()
         except Exception as e:  # noqa: BLE001 -- retried next tick
@@ -141,6 +147,8 @@ class Watcher:
                     # The app fetches right after the trigger; it must not get the old copy.
                     self._service.invalidate(list_id)
                     invalidated = True
+                # Counted before the request: an app can fetch before sync() returns.
+                seen = self._service.serves(arr.name, list_id)
                 try:
                     arr.sync(definition)
                 except Exception as e:  # noqa: BLE001
@@ -149,6 +157,7 @@ class Watcher:
                     ok = False
                     continue
                 self._synced[key] = updated
+                self._pending[key] = (arr, list_id, seen, self._clock())
                 self._log(f"watch: list {list_id} {why}; {arr.name} list #{definition} sync requested")
 
         # Only a complete pass consumes the activity change or the full check.
@@ -158,6 +167,32 @@ class Watcher:
                 self._activity = moved
             if full_due:
                 self._last_full = now
+
+    def _redeliver(self):
+        """Ask again for any accepted sync the app hasn't actually fetched.
+
+        An app accepting the command says nothing about its fetch, which can
+        fail -- a Simkl hiccup makes the bridge answer an error, correctly.
+        Delivery counts only once the bridge has served that list whole to
+        that app since the request.
+        """
+        now = self._clock()
+        for key, (arr, list_id, seen, at) in list(self._pending.items()):
+            if self._service.serves(arr.name, list_id) > seen:
+                del self._pending[key]
+                continue
+            if now - at < REDELIVER_AFTER:
+                continue
+            seen = self._service.serves(arr.name, list_id)
+            try:
+                arr.sync(key[1])
+            except Exception as e:  # noqa: BLE001
+                self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
+                          f"the sync request, and asking again failed, will retry: {e}")
+                continue
+            self._pending[key] = (arr, list_id, seen, now)
+            self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
+                      f"the sync request, asking again")
 
     def _discover(self):
         """({simkl list id: [(app, definition id)]}, whether an app just came back)."""

@@ -42,6 +42,7 @@ class ListService:
         self._min_refresh = min_refresh
         self._allowed = allowed
         self._lists = {}
+        self._serves = {}          # (target, list id) -> successful answers so far
         self._lock = threading.Lock()
         self._log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
 
@@ -56,7 +57,18 @@ class ListService:
                                   f"point {other} at /{other}/{list_id} instead")
             # Rebuilt every time: the id cache makes it cheap, and a memoised
             # feed would never re-check a mapping that was missing last week.
-            return self._build(target, list_id, cached.items)
+            feed = self._build(target, list_id, cached.items)
+            self._serves[(target, list_id)] = self._serves.get((target, list_id), 0) + 1
+            return feed
+
+    def serves(self, target, list_id):
+        """How many times this list has been served whole to this app.
+
+        The watcher uses it to tell a sync the app actually fetched from one it
+        merely accepted: a fetch that failed never reaches this count.
+        """
+        with self._lock:
+            return self._serves.get((target, list_id), 0)
 
     def allows(self, list_id):
         """Whether BRIDGE_LISTS (if set) permits this list."""

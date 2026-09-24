@@ -128,6 +128,18 @@ source confirms it (`ImportListUpdatedHandler` handles
 `ProviderUpdatedEvent` only). Timing uses a monotonic clock. Disabled definitions
 and lists outside `BRIDGE_LISTS` are never watched.
 
+**A sync counts as delivered only when the app has fetched the list.** An
+app accepting `ImportListSync` (`201`) says nothing about the fetch that
+follows, which can fail: a Simkl error makes the bridge answer an error,
+correctly. The app's own retry then waits out its 6 h / 12 h minimum,
+because that is measured from its last *successful* sync. So each accepted
+request stays pending until the bridge has served that list whole to that
+app. The count of successful serves is read before the request is sent,
+because an app can fetch before the request returns. A request still unmet
+after two minutes is sent again on the next tick. That costs no Simkl call.
+The nightly soak found this: one edit in a 25%-fault run was accepted and
+never fetched.
+
 Watcher failures are logged and retried next tick, and never touch serving.
 Arr API keys go only in the `X-Api-Key` header. Error responses are not
 echoed, because an arr's error page can quote the key. The alternative of

@@ -268,8 +268,10 @@ def main():
     time.sleep(a.minutes * 60)
     stop.set()
     # Let edits made near the end settle, without the faults that slow delivery.
+    # Long enough for a sync whose fetch failed to be requested again: one watch
+    # interval (30s) plus the watcher's REDELIVER_AFTER (120s), with margin.
     http("POST", f"{admin}/faults", {"rate": 0.0})
-    time.sleep(90)
+    time.sleep(210)
     proc.terminate()
     proc.wait(10)
     output = log_path.read_text()
@@ -311,6 +313,7 @@ def main():
         "rss_kb": {"first": samples[0][1] if samples else None, "last": samples[-1][1] if samples else None},
         "threads_max": max((s[2] for s in samples), default=None),
         "watch_log_lines": sum(1 for line in output.splitlines() if line.startswith("watch:")),
+        "redeliveries": sum(1 for line in output.splitlines() if "asking again" in line),
         "failures": failures[:50],
     }
     print(json.dumps(report, indent=2))
