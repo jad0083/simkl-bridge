@@ -1,9 +1,17 @@
 version: 2
 updates:
+  # All GitHub Actions updates arrive as one pull request: they only change
+  # the build machinery, and main's "up to date before merge" rule would
+  # otherwise mean a full CI round per action.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # The base image stays on its own: it changes what runs in the container,
+  # and the end-to-end suite exercises it against real Sonarr and Radarr.
   - package-ecosystem: docker
     directory: /
     schedule:
