@@ -95,3 +95,20 @@ def test_transient_errors_while_polling_keep_polling(tmp_path, fake, clock):
     poll_sequence(fake, [(503, {}), (429, {"error": "rate_limit"}), (200, []), GRANTED])
     path, _ = run(tmp_path, fake, clock)
     assert path.read_text() == "simkl_rt_SECRETVALUE"
+
+
+def test_device_flow_uses_the_configured_base(tmp_path, fake, clock):
+    start(fake)
+    poll_sequence(fake, [GRANTED])
+    device_flow("cid", tmp_path / "x.secret", transport=fake, clock=clock, sleep=clock.sleep,
+                say=lambda m: None, base="http://stand-in:9000")
+    assert {r["url"].split("?")[0] for r in fake.requests} == {
+        "http://stand-in:9000/oauth2/device", "http://stand-in:9000/oauth2/token"}
+
+
+def test_an_unreachable_simkl_is_a_clear_error_not_a_traceback(tmp_path, clock):
+    def down(*a, **k):
+        raise OSError("Name or service not known")
+    with pytest.raises(DeviceFlowError, match="could not reach Simkl"):
+        device_flow("cid", tmp_path / "x.secret", transport=down, clock=clock,
+                    sleep=clock.sleep, say=lambda m: None)

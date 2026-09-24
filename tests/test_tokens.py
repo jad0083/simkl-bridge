@@ -105,3 +105,10 @@ def test_a_network_failure_is_an_auth_error(tmp_path, clock):
     s = TokenStore(tmp_path / "t.json", refresh_token="r", client_id="cid", transport=down, clock=clock)
     with pytest.raises(AuthError, match="no route"):
         s.access_token()
+
+
+def test_refresh_goes_to_the_configured_base(tmp_path, fake, clock):
+    s = TokenStore(tmp_path / "t.json", refresh_token="r", client_id="cid", transport=fake,
+                   clock=clock, base="http://stand-in:9000")
+    s.access_token()
+    assert fake.requests[0]["url"] == "http://stand-in:9000/oauth2/token"

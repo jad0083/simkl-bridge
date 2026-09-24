@@ -39,6 +39,11 @@ def arrs_from_env(env, strict=False):
     return out
 
 
+def api_base(env):
+    """Simkl's API, or a stand-in for testing (SIMKL_API_BASE)."""
+    return (env.get("SIMKL_API_BASE") or "https://api.simkl.com").rstrip("/")
+
+
 def watch_interval(env):
     return max(MIN_WATCH_INTERVAL, int(env.get("BRIDGE_WATCH_INTERVAL") or 180))
 
@@ -47,10 +52,11 @@ def serve():
     data = pathlib.Path(os.environ.get("BRIDGE_DATA_DIR", "/data"))
     data.mkdir(parents=True, exist_ok=True)
     client_id = _env("SIMKL_CLIENT_ID")
+    base = api_base(os.environ)
     tokens = TokenStore(data / "token.json", refresh_token=_env("SIMKL_REFRESH_TOKEN"),
                         client_id=client_id,
-                        client_secret=os.environ.get("SIMKL_CLIENT_SECRET") or None)
-    simkl = Simkl(client_id, tokens)
+                        client_secret=os.environ.get("SIMKL_CLIENT_SECRET") or None, base=base)
+    simkl = Simkl(client_id, tokens, base=base)
     allowed = os.environ.get("BRIDGE_LISTS", "").replace(",", " ").split()
     service = ListService(simkl, Resolver(simkl, IdCache(data / "ids.json")),
                           min_refresh=int(os.environ.get("BRIDGE_MIN_REFRESH", "900")),
@@ -74,7 +80,7 @@ def auth():
     runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
     out = pathlib.Path(runtime if os.path.isdir(runtime) else ".") / "simkl-refresh-token.secret"
     try:
-        device_flow(_env("SIMKL_CLIENT_ID"), out)
+        device_flow(_env("SIMKL_CLIENT_ID"), out, base=api_base(os.environ))
     except DeviceFlowError as e:
         sys.exit(str(e))
 

@@ -11,8 +11,7 @@ import urllib.parse
 from . import APP_NAME, __version__
 from .http import urllib_transport, write_private
 
-DEVICE_URL = "https://api.simkl.com/oauth2/device"
-TOKEN_URL = "https://api.simkl.com/oauth2/token"
+BASE = "https://api.simkl.com"
 GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 
@@ -28,11 +27,15 @@ def _post(transport, url, form):
 
 
 def device_flow(client_id, out_path, transport=urllib_transport, clock=time.monotonic,
-                sleep=time.sleep, say=print, deadline=600):
+                sleep=time.sleep, say=print, deadline=600, base=BASE):
+    base = base.rstrip("/")
     if os.path.exists(out_path):
         raise DeviceFlowError(f"{out_path} exists; store or shred it first")
 
-    r = _post(transport, DEVICE_URL, {"client_id": client_id, "scope": "media:read"})
+    try:
+        r = _post(transport, f"{base}/oauth2/device", {"client_id": client_id, "scope": "media:read"})
+    except OSError as e:
+        raise DeviceFlowError(f"could not reach Simkl at {base}: {e}") from e
     start = r.json()
     start = start if isinstance(start, dict) else {}
     if r.status == 401:
@@ -52,7 +55,7 @@ def device_flow(client_id, out_path, transport=urllib_transport, clock=time.mono
         if clock() > give_up:
             raise DeviceFlowError("not approved in time; run it again")
         try:
-            r = _post(transport, TOKEN_URL, {"grant_type": GRANT, "client_id": client_id,
+            r = _post(transport, f"{base}/oauth2/token", {"grant_type": GRANT, "client_id": client_id,
                                              "device_code": start["device_code"]})
         except OSError:
             continue

@@ -28,3 +28,13 @@ def test_a_url_without_a_key_is_a_startup_error_not_a_silent_skip():
 def test_watch_interval_has_a_floor(raw, expected):
     """Faster than 30s buys nothing and spends the user's shared Simkl quota."""
     assert watch_interval({} if raw is None else {"BRIDGE_WATCH_INTERVAL": raw}) == expected
+
+
+def test_api_base_defaults_to_simkl():
+    from simkl_bridge.__main__ import api_base
+    assert api_base({}) == "https://api.simkl.com"
+
+
+def test_api_base_can_point_at_a_stand_in_for_testing():
+    from simkl_bridge.__main__ import api_base
+    assert api_base({"SIMKL_API_BASE": "http://fake-simkl:9000/"}) == "http://fake-simkl:9000"

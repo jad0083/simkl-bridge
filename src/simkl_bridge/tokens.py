@@ -15,7 +15,7 @@ import urllib.parse
 from . import APP_NAME, __version__
 from .http import urllib_transport, write_private
 
-TOKEN_URL = "https://api.simkl.com/oauth2/token"
+BASE = "https://api.simkl.com"
 REFRESH_MARGIN = 86400
 # Used if a token response omits expires_in: assume the documented 7 days.
 DEFAULT_LIFETIME = 7 * 86400
@@ -27,8 +27,9 @@ class AuthError(Exception):
 
 class TokenStore:
     def __init__(self, path, refresh_token, client_id, client_secret=None,
-                 transport=urllib_transport, clock=time.time):
+                 transport=urllib_transport, clock=time.time, base=BASE):
         self.path = path
+        self._token_url = f"{base.rstrip('/')}/oauth2/token"
         self._refresh_token = refresh_token
         # Ties the saved access token to the grant it came from, without storing the refresh token.
         self._grant = hashlib.sha256(refresh_token.encode()).hexdigest()[:16]
@@ -70,7 +71,7 @@ class TokenStore:
             form["client_secret"] = self._client_secret
         try:
             r = self._transport(
-                "POST", TOKEN_URL,
+                "POST", self._token_url,
                 headers={"Content-Type": "application/x-www-form-urlencoded",
                          "User-Agent": f"{APP_NAME}/{__version__}"},
                 data=urllib.parse.urlencode(form).encode(), timeout=30)
