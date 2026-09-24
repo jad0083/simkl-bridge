@@ -33,9 +33,10 @@ Sonarr and Radarr to sync the moment a list changes.
 **Contents:**
 [Why](#why-sonarr-and-radarr-cant-do-this-on-their-own) ·
 [How it works](#how-it-works) ·
-[Setup](#setup) ·
-[Adding lists](#adding-lists) ·
-[Fast syncs](#fast-syncs-new-titles-in-minutes) ·
+[Setup guide](#setup-guide) ·
+[Add a list](#part-2-add-a-list) ·
+[Common layouts](#common-layouts) ·
+[Fast syncs](#how-fast-syncs-work) ·
 [Configuration](#configuration) ·
 [Troubleshooting](#troubleshooting) ·
 [FAQ](#faq)
@@ -87,29 +88,49 @@ flowchart LR
 2. **The bridge pushes a nudge (optional).** Given each app's API key, the
    bridge watches Simkl. When a list changes, it tells exactly the
    Sonarr/Radarr lists using it to sync *now*. The apps then pull as in
-   step 1, just much sooner. [Details below](#fast-syncs-new-titles-in-minutes).
+   step 1, just much sooner. [Details below](#how-fast-syncs-work).
 
 The bridge stores nothing but its access token and a cache of id mappings.
 Sonarr and Radarr stay in charge of what gets added and how.
 
-## Setup
+## Setup guide
 
-**You need:** a Simkl **PRO or VIP** account (Simkl limits custom lists to
-those plans), Docker, and Sonarr and/or Radarr that can reach the bridge,
-usually because they share a Docker network.
+There are two parts:
 
-### 1. Register a Simkl app (free, 2 minutes)
+- **[Part 1: one-time setup](#part-1-one-time-setup)** (about 15 minutes). A
+  Simkl app, a sign-in, and the container.
+- **[Part 2: add a list](#part-2-add-a-list)** (about 2 minutes, per list).
+  Repeat it for every Simkl list you want in Sonarr or Radarr.
 
-On simkl.com go to **Settings → Developer → Add**, then create an **AUTH V2**
-app:
+### Before you start
 
-- **App type: TV, devices & command line.** Choose this one. The type can't be
-  changed later, and the other types won't work with the bridge's sign-in.
-- **Name:** anything, e.g. *List Bridge for Simkl*.
+| You need | Notes |
+|---|---|
+| A Simkl **PRO or VIP** account | Simkl only offers custom lists through its API on these plans |
+| Docker with Compose | The bridge runs as one small container |
+| Sonarr v4 and/or Radarr | Tested with Sonarr 4.0.20 and Radarr 6.4.4, stable and develop builds |
+| The Docker network Sonarr/Radarr are on | The bridge must join it. To find it: `docker inspect sonarr --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'` |
 
-Copy the **client ID**. It's public, and this app type has no secret.
+---
 
-### 2. Sign in once to get a refresh token
+### Part 1: one-time setup
+
+#### Step 1: Register a Simkl app
+
+1. Sign in at [simkl.com](https://simkl.com) and open **Settings → Developer**.
+2. Choose **Add** / create a new app, and pick **AUTH V2**.
+3. **App type: TV, devices & command line.** ⚠️ Pick exactly this one. It
+   can't be changed later, and the other types (mobile/desktop, server) use
+   a sign-in the bridge doesn't support.
+4. **Name:** anything. Simkl asks that names mentioning Simkl read "*… for
+   Simkl*", e.g. *List Bridge for Simkl*. Leave the optional fields empty.
+5. Create it and copy the **Client ID** (a 64-character code). It's public;
+   this app type has no secret.
+
+#### Step 2: Sign in once to get a refresh token
+
+Run this in the folder where you'll keep the bridge's files, replacing
+`<client_id>`:
 
 ```sh
 docker run --rm -it -e SIMKL_CLIENT_ID=<client_id> \
@@ -117,19 +138,46 @@ docker run --rm -it -e SIMKL_CLIENT_ID=<client_id> \
   ghcr.io/jad0083/simkl-bridge:latest auth
 ```
 
-Open the link it prints, signed in to your PRO/VIP account, and approve. The
-bridge only asks for **read** access. The refresh token is saved to
-`./simkl-refresh-token.secret` (mode `0600`). It's never printed on screen;
-you see only its length and a fingerprint. Put it in your secrets (e.g. a
-`.env` file) and delete the file.
+1. It prints a link like `https://simkl.com/pin?user_code=ABCD-EFGH`. Open it,
+   signed in to your **PRO/VIP** account, and approve. The bridge asks only for
+   **read** access.
+2. It saves the refresh token to `./simkl-refresh-token.secret`. The token is
+   never shown on screen; you see its length and a fingerprint, so you can
+   confirm it later without revealing it.
+3. Copy the file's contents into your `.env` (Step 4), then delete the file.
 
-This is a one-time step: the refresh token lasts 180 days and renews itself
+You only do this once. The refresh token lasts 180 days and renews itself
 every time the bridge uses it.
 
-### 3. Run the bridge
+#### Step 3: Copy Sonarr's and Radarr's API keys (for fast syncs)
+
+This is optional but recommended: it makes new titles arrive in about 3 minutes
+instead of 6–12 hours (see [How fast syncs work](#how-fast-syncs-work)).
+
+In each app: **Settings → General → Security → API Key**. Copy it. Skip this
+step to run the bridge pull-only.
+
+#### Step 4: Create `.env`
+
+Next to your `compose.yaml`:
+
+```ini
+SIMKL_CLIENT_ID=<the client ID from step 1>
+SIMKL_REFRESH_TOKEN=<the contents of simkl-refresh-token.secret>
+# Fast syncs (step 3). Leave both lines of an app out to skip it.
+SONARR_API_KEY=<Sonarr's API key>
+RADARR_API_KEY=<Radarr's API key>
+```
+
+Keep `.env` private (`chmod 600 .env`). The bridge never logs these values.
+
+#### Step 5: Add the bridge to Compose
+
+**If Sonarr and Radarr are in the same `compose.yaml`**, add this service to
+it. Services in one Compose project share a network by default, so there's
+nothing else to set:
 
 ```yaml
-services:
   simkl-bridge:
     image: ghcr.io/jad0083/simkl-bridge:latest
     container_name: simkl-bridge
@@ -137,75 +185,184 @@ services:
     environment:
       - SIMKL_CLIENT_ID=${SIMKL_CLIENT_ID}
       - SIMKL_REFRESH_TOKEN=${SIMKL_REFRESH_TOKEN}
-      # Optional, for fast syncs (see below):
-      - SONARR_URL=http://sonarr:8989
+      - SONARR_URL=http://sonarr:8989        # your Sonarr's container name and port
       - SONARR_API_KEY=${SONARR_API_KEY}
-      - RADARR_URL=http://radarr:7878
+      - RADARR_URL=http://radarr:7878        # your Radarr's container name and port
       - RADARR_API_KEY=${RADARR_API_KEY}
     volumes:
-      - ./simkl-bridge:/data         # owned by uid 10001: sudo chown 10001 ./simkl-bridge
-    networks:
-      - media                       # the network Sonarr and Radarr are on
+      - ./simkl-bridge:/data
+```
+
+**If they run elsewhere**, give the bridge its own `compose.yaml` and join
+their network (the name from [Before you start](#before-you-start)):
+
+```yaml
+services:
+  simkl-bridge:
+    # ...same as above...
+    networks: [media]
 
 networks:
   media:
     external: true
+    name: media                              # replace with your network's name
 ```
 
-No port needs publishing: Sonarr and Radarr reach it by name. The bridge has
-no login of its own, so **don't expose it to the internet**.
+Things to check:
+- **`SONARR_URL` / `RADARR_URL`** use the container **name** and **internal
+  port**, not a published port or a public domain. If Sonarr is served under a
+  URL base (e.g. `/sonarr`), include it: `http://sonarr:8989/sonarr`.
+- **The data folder** must be writable by the container's user (uid 10001):
+  `mkdir -p simkl-bridge && sudo chown 10001:10001 simkl-bridge`.
+- **No port is published.** Sonarr and Radarr reach the bridge by name. It has
+  no login of its own, so **don't expose it to the internet**.
 
-Check it's up with `docker logs simkl-bridge`, which should print
-`simkl-bridge listening on :8080`. With fast syncs enabled, it also prints
-`watching for list changes every 180s; syncs go to sonarr, radarr`.
+#### Step 6: Start it and check it
 
-## Adding lists
+```sh
+docker compose up -d simkl-bridge
+docker logs simkl-bridge
+```
 
-### 1. Find the list ID
+You should see:
 
-Open the list on simkl.com. The **number in its URL** is the list ID. It
-can be one of your lists, or anyone's **public** or **unlisted** list.
-Private lists can't be read.
+```
+watching for list changes every 180s; syncs go to sonarr, radarr
+simkl-bridge listening on :8080
+```
 
-### 2. Add it to Sonarr and/or Radarr
+The first line only appears with fast syncs on. Then check that Sonarr and
+Radarr can reach the bridge:
 
-A Simkl list holds one type (TV, movies or anime), which decides where it
-goes:
+```sh
+docker exec sonarr curl -s http://simkl-bridge:8080/healthz      # {"status": "ok"}
+docker exec radarr curl -s http://simkl-bridge:8080/healthz
+```
 
-| List type | Add to | List URL |
+Setup is done. Now add lists.
+
+---
+
+### Part 2: add a list
+
+Repeat these steps for each Simkl list.
+
+#### Step 1: Create the list on Simkl (or pick an existing one)
+
+1. On simkl.com, open your profile's **Lists** section and create a **new
+   list**.
+2. **Choose its type** (TV, Movies or Anime). A Simkl list holds one type, and
+   the type decides which app it can feed (step 3).
+   - **Anime films go in an Anime list**, not a Movies list: Simkl files them
+     as anime.
+   - **An Anime list can mix series and films.** The bridge splits it for you.
+3. Add titles from any title's page with **Add to list**.
+
+You can also use **someone else's list**, as long as it's **public** or
+**unlisted**. Private lists can only be read by their owner.
+
+#### Step 2: Copy the list ID
+
+Open the list on simkl.com. The **number in the page address** is the list
+ID, e.g. `152642`.
+
+#### Step 3: Decide which app(s) get it
+
+| Simkl list type | Add it to | List URL |
 |---|---|---|
-| TV | Sonarr | `http://simkl-bridge:8080/sonarr/<list id>` |
-| Movies | Radarr | `http://simkl-bridge:8080/radarr/<list id>` |
-| Anime | Sonarr, plus Radarr if it has anime films | both |
+| **TV** | Sonarr | `http://simkl-bridge:8080/sonarr/<list id>` |
+| **Movies** | Radarr | `http://simkl-bridge:8080/radarr/<list id>` |
+| **Anime**, series only | Sonarr | `http://simkl-bridge:8080/sonarr/<list id>` |
+| **Anime**, films only | Radarr | `http://simkl-bridge:8080/radarr/<list id>` |
+| **Anime**, series *and* films | **both**, with the same list ID | both URLs above |
 
-**Sonarr:** Settings → Import Lists → **+** → **Custom List**
-- **List URL:** as above
-- **Root folder / quality profile:** your choice
-- **Series Type:** **Anime** for an anime list, otherwise Standard
+**How anime is split:** each anime title has a subtype on Simkl. **Movie** goes
+to Radarr; **TV, OVA, ONA and special** go to Sonarr. A title only ever reaches
+one app. If you add an anime list to Radarr and it has no films yet, Radarr
+simply gets an empty list, which is normal, and films you add later arrive
+automatically.
 
-**Radarr:** Settings → Lists → **+** → **Custom Lists**
-- **List URL:** as above
-- **Root folder, quality profile, monitor, minimum availability:** your choice
+#### Step 4a: Add it to Sonarr
 
-### 3. Test, then save
+**Settings → Import Lists → + (Add List)**, then under **Advanced** choose
+**Custom List**:
 
-**Test** should pass. If it fails, the message says why (see
-[Troubleshooting](#troubleshooting)). Radarr syncs a new list as soon as it's
-saved. Sonarr only does that when a list is *edited*, so a new Sonarr list
-waits for its next scheduled run, or at most about 3 minutes with
-[fast syncs](#fast-syncs-new-titles-in-minutes) on, since the bridge syncs
-every list it hasn't seen before. From then on it stays in sync by itself, and
-there's nothing to change on the bridge.
+| Field | What to set |
+|---|---|
+| **Name** | Anything, e.g. `Simkl – Anime` |
+| **Enable Automatic Add** | ✅ On, or titles are only listed, never added |
+| **Monitor** | Your preference (e.g. *All Episodes*) |
+| **Monitor New Items** | Your preference |
+| **Root Folder** | Where these series belong (e.g. your anime folder for an anime list) |
+| **Quality Profile** | Your preference |
+| **Series Type** | **Anime** for an anime list; **Standard** otherwise |
+| **Season Folder** | Your preference |
+| **Search for Missing Episodes** | On, to start downloading when a series is added |
+| **List URL** | `http://simkl-bridge:8080/sonarr/<list id>` |
 
-## Fast syncs: new titles in minutes
+#### Step 4b: Add it to Radarr
+
+**Settings → Lists → + (Add List)**, then under **Advanced** choose
+**Custom Lists**:
+
+| Field | What to set |
+|---|---|
+| **Name** | Anything, e.g. `Simkl – Anime films` |
+| **Enable** and **Enable Automatic Add** | ✅ Both on |
+| **Monitor** | Usually *Movie Only* |
+| **Minimum Availability** | Usually *Released* |
+| **Quality Profile** | Your preference |
+| **Root Folder** | Where these films belong (e.g. your anime movies folder) |
+| **Search on Add** | On, to start downloading when a film is added |
+| **List URL** | `http://simkl-bridge:8080/radarr/<list id>` |
+
+#### Step 5: Test, save, and check
+
+1. Press **Test**. It should succeed. If it doesn't, the message says why
+   (see [Troubleshooting](#troubleshooting)). The usual causes are a movie list
+   pointed at Sonarr (or the reverse) and a wrong list ID.
+2. Press **Save**.
+3. To see exactly what the app will receive:
+   ```sh
+   docker exec sonarr curl -s http://simkl-bridge:8080/sonarr/<list id>
+   ```
+   Each title appears with its TVDB ID (Sonarr) or TMDb ID (Radarr).
+
+**When titles appear:** Radarr syncs a new list as soon as it's saved. Sonarr
+doesn't sync a list when it's added, only when it's edited, so with fast syncs
+on, the bridge syncs it within about 3 minutes. Without fast syncs it waits for
+Sonarr's own schedule. From then on the list stays in sync by itself; there's
+nothing to change on the bridge.
+
+#### Step 6 (optional): Watch a fast sync
+
+Add a title to the list on simkl.com. Within about 3 minutes the bridge logs:
+
+```
+watch: list 152642 changed; sonarr list #3 sync requested
+```
+
+Then Sonarr's own log shows *Import List Sync Completed … Series added: 1*.
+
+---
+
+### Common layouts
+
+| You want | Do this |
+|---|---|
+| A TV watchlist in Sonarr | TV list → Sonarr only |
+| A movie watchlist in Radarr | Movies list → Radarr only |
+| One anime list for everything | Anime list → **both** apps with the same ID. In Sonarr set *Series Type: Anime* and your anime root folder; in Radarr use your anime-movies root folder |
+| Anime films kept separate | A second Anime list with only films → Radarr only |
+| A friend's recommendations | Their public list's ID → the matching app. Changes arrive within the full-check interval (`BRIDGE_FULL_CHECK`, e.g. 15 min at `900`) |
+
+## How fast syncs work
 
 Out of the box, Sonarr re-checks a Custom List at most every **6 hours** and
-Radarr every **12 hours**. Those minimums are hardcoded in each app. There is
-one way around them: a sync requested for one specific list is honoured
-immediately.
-
-With `SONARR_URL`/`SONARR_API_KEY` and/or `RADARR_URL`/`RADARR_API_KEY` set,
-the bridge does that for you:
+Radarr every **12 hours**. Those minimums are hardcoded in each app, but a
+sync requested for one specific list is honoured immediately. With the API
+keys from [Step 3](#step-3-copy-sonarrs-and-radarrs-api-keys-for-fast-syncs),
+the bridge makes that request for you:
 
 ```mermaid
 sequenceDiagram
@@ -217,44 +374,39 @@ sequenceDiagram
     loop every 3 minutes
         Bridge->>Simkl: anything changed? (one call)
     end
-    Simkl-->>Bridge: yes, list 123 changed
-    Bridge->>Sonarr: sync list #5 now
-    Sonarr->>Bridge: GET /sonarr/123
+    Simkl-->>Bridge: yes, list 152642 changed
+    Bridge->>Sonarr: sync list #3 now
+    Sonarr->>Bridge: GET /sonarr/152642
     Bridge-->>Sonarr: the list, with TVDB ids
     Sonarr->>Sonarr: add the new show
 ```
 
-**How fast?**
-
 | List | Typical delay | Why |
 |---|---|---|
-| Your own lists | **~3 minutes** | Simkl keeps one account-wide "last changed" stamp for your lists; the bridge checks it every 3 min |
-| Someone else's list | **up to 1 hour** by default (15 min with `BRIDGE_FULL_CHECK=900`) | Their edits don't move *your* stamp, so these are caught by a periodic full check |
-
-In testing, a show added on simkl.com appeared in Sonarr **18 seconds** later.
+| Your own lists | **~3 minutes** (18 seconds measured) | Simkl keeps one account-wide "last changed" stamp for your lists; the bridge checks it every 3 min |
+| Someone else's list | **up to 1 hour** by default; 15 min with `BRIDGE_FULL_CHECK=900` | Their edits don't move *your* stamp, so a periodic full check catches them |
 
 **What it does automatically:**
-- **Finds your lists by itself.** Every Sonarr *Custom List* or Radarr
-  *Custom Lists* entry whose URL points at the bridge is watched. A list you
-  add later is found and synced within about 3 minutes, with nothing to
-  configure. After a restart, each list is synced once, to catch up on
-  anything that changed while the bridge was down.
-- **Syncs only what changed,** in only the apps using that list. Disabled
+- **Finds lists by itself.** Any Sonarr *Custom List* or Radarr *Custom Lists*
+  entry whose URL points at the bridge is watched, including ones added later.
+  Each is synced once when first seen, and after a restart, to catch up.
+- **Syncs only what changed,** and only in the apps using that list. Disabled
   lists are left alone.
-- **Retries until it succeeds.** If Simkl or an app is unreachable, the change
-  is retried on the next check, never dropped.
-- **Costs almost nothing.** It's one small call every 3 minutes, whatever the
-  number of lists (about 480 a day). Simkl allows 1,000 (PRO) or 10,000 (VIP)
-  a day per user, shared with your other Simkl apps.
+- **Makes sure the app really got it.** A sync counts only once the app has
+  actually fetched the list. If its fetch failed, for example on a Simkl
+  hiccup, the bridge asks again, rather than leaving it to the app's own
+  6–12 hour retry.
+- **Costs almost nothing:** one small call every 3 minutes, whatever the number
+  of lists (about 480 a day). Simkl allows 1,000 (PRO) or 10,000 (VIP) a day per
+  user, shared with your other Simkl apps.
 
 **Good to know:**
-- **Simkl turns on the "last changed" stamp after your first list edit.** On
-  a brand-new setup, own-list changes are caught by the hourly full check
-  until you edit any list once. After that it's minutes.
-- **API keys are admin keys.** Neither app offers a read-only key. Keep them in
-  your secrets like the Simkl token. The bridge only ever sends them to the
-  URL you configured and never logs them. Leave them unset if you prefer the
-  bridge pull-only.
+- **The stamp starts working after your first list edit.** Simkl leaves the
+  "last changed" stamp empty until you first edit a list. Until then, your own
+  lists are caught by the full check.
+- **API keys are admin keys.** Neither app offers a read-only key. The bridge
+  only ever sends them to the URL you configured and never logs them. Leave
+  them out to keep the bridge pull-only.
 
 ## Configuration
 
@@ -299,6 +451,8 @@ What **Test** in Sonarr/Radarr (or `curl http://simkl-bridge:8080/sonarr/<id>`) 
 | `502 … token refresh failed` | The refresh token was revoked or is from another app | Re-run the `auth` step |
 | `403 … not in BRIDGE_LISTS` | You restricted which lists are served | Add the ID to `BRIDGE_LISTS` |
 | A title never appears | Simkl has no TVDB (Sonarr) or TMDb (Radarr) id for it | `docker logs simkl-bridge` names each skipped title |
+| Log: `… still hasn't fetched after 5 re-requests; giving up` | The app accepted the sync request but its fetch keeps failing or never arrives | Check that app's own log (*System → Logs*) for the error. Its fetch must come from the app itself: a proxy that rewrites its `User-Agent` hides it from the bridge |
+| Log: `sonarr unreachable` / `radarr unreachable` | `SONARR_URL` / `RADARR_URL` is wrong, or the bridge isn't on their network | Use the container name and internal port, plus any URL base; see [Step 5](#step-5-add-the-bridge-to-compose) |
 
 The bridge never answers an error with an empty list. Sonarr/Radarr simply
 retry later, and nothing is removed from your library.
