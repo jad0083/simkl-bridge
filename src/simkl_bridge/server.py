@@ -25,8 +25,12 @@ def make_server(service, host, port):
             m = ROUTE.match(path)
             if not m:
                 return self._send(404, {"error": "unknown route; use /sonarr/<list_id> or /radarr/<list_id>"})
+            target = m.group(1)
+            # Only the app's own fetch confirms a sync request (see watch.py).
+            # Sonarr and Radarr send "Sonarr/<version> (...)" / "Radarr/<version> (...)".
+            from_app = (self.headers.get("User-Agent") or "").lower().startswith(f"{target}/")
             try:
-                return self._send(200, service.feed(m.group(1), int(m.group(2))))
+                return self._send(200, service.feed(target, int(m.group(2)), from_app=from_app))
             except Exception as e:  # noqa: BLE001 -- every failure must become a non-200
                 for kind, status in ERRORS:
                     if isinstance(e, kind):
@@ -43,6 +47,8 @@ def make_server(service, host, port):
             self.wfile.write(data)
 
         def log_message(self, fmt, *args):
-            sys.stderr.write(f"{self.address_string()} {fmt % args}\n")
+            # The caller's User-Agent says which app (and version) fetched.
+            agent = (self.headers.get("User-Agent") or "-") if self.headers else "-"
+            sys.stderr.write(f"{self.address_string()} {fmt % args} [{agent[:80]}]\n")
 
     return ThreadingHTTPServer((host, port), Handler)

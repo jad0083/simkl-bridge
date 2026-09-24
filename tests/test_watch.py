@@ -11,7 +11,7 @@ from conftest import FakeSimkl
 
 from simkl_bridge.resolve import IdCache, Resolver
 from simkl_bridge.service import ListService
-from simkl_bridge.simkl import Simkl
+from simkl_bridge.simkl import Simkl, SimklError
 from simkl_bridge.tokens import TokenStore
 from simkl_bridge.watch import ArrClient, Watcher, lists_by_simkl_id
 
@@ -90,10 +90,31 @@ class World:
                                                         clock=clock), clock=clock)
         self.logs = []
         self.marks = {}
+        # Real apps fetch the list right after accepting a sync; so do these,
+        # unless a test switches it off to model a fetch that failed.
+        self.auto_fetch = True
+        for name, arr in (("sonarr", sonarr), ("radarr", radarr)):
+            arr.on("POST", "/api/v3/command", self._accept_and_fetch(name, arr))
         self.watcher = Watcher(self.simkl, self.service,
                                [ArrClient("sonarr", "http://sonarr:8989", "SKEY", transport=sonarr),
                                 ArrClient("radarr", "http://radarr:7878", "RKEY", transport=radarr)],
                                clock=clock, full_every=3600, log=self.logs.append)
+
+    def _accept_and_fetch(self, name, arr):
+        def handler(req):
+            if self.auto_fetch:
+                definition = json.loads(req["body"])["definitionId"]
+                _, lists = arr.routes[("GET", "/api/v3/importlist")](req)
+                field = "baseUrl" if name == "sonarr" else "url"
+                for lst in lists:
+                    if lst["id"] == definition:
+                        url = {f["name"]: f["value"] for f in lst["fields"]}[field]
+                        try:
+                            self.service.feed(name, int(url.rstrip("/").rsplit("/", 1)[1]))
+                        except Exception as e:  # noqa: BLE001 -- a failed fetch is a scenario, not an error
+                            self.logs.append(f"test app: {name} fetch failed: {e}")
+            return 201, {"id": 1, "name": "ImportListSync"}
+        return handler
 
     def _list(self, lid):
         def handler(req):
@@ -292,3 +313,101 @@ def test_lists_outside_bridge_lists_are_not_watched(world):
     world.service._allowed = {7}
     world.start()
     assert world.fake.calls("/lists/152642") == []
+
+
+# --- delivery is confirmed by the app's fetch, not by the app accepting the command ----------
+
+def fetch_ok(world, target, list_id):
+    """What the app does after accepting a sync: fetch the list from the bridge."""
+    world.fake.on("GET", f"/lists/{list_id}", lambda r: (200, {
+        "id": list_id, "media_type": "anime", "updated_at": world.updated[list_id],
+        "pagination": {"page": 1, "limit": 500, "total_items": 0, "total_pages": 1}, "items": []}))
+    world.service.feed(target, list_id)
+
+
+def test_a_sync_the_app_never_fetched_is_requested_again(world):
+    """Sonarr accepted the command but its fetch failed (e.g. Simkl hiccuped).
+    Its own retry would be 6 hours away, so the bridge asks again."""
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10]
+    world.clock.now += 180                    # no fetch arrived
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10, 10]
+    assert any("not fetched" in m for m in world.logs)
+
+
+def test_a_sync_the_app_fetched_is_not_repeated(world):
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    fetch_ok(world, "sonarr", 152642)
+    world.clock.now += 180
+    world.watcher.tick()
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10]
+
+
+def test_a_failed_fetch_does_not_count_as_delivery(world):
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    world.fake.json("GET", "/lists/152642", {"error": "boom"}, status=503)
+    with pytest.raises(SimklError):
+        world.service.feed("sonarr", 152642)
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10, 10]
+
+
+def test_redelivery_does_not_need_the_activity_stamp_to_move(world):
+    """Re-asking costs no Simkl call: it's between the bridge and the app."""
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    before = len(world.fake.requests)
+    world.clock.now += 180
+    world.watcher.tick()
+    simkl_paths = [r["path"] for r in world.fake.requests[before:]]
+    assert simkl_paths == ["/sync/activities"]
+    assert world.syncs(world.sonarr) == [10, 10]
+
+
+def test_a_fetch_by_someone_else_does_not_confirm_delivery(world):
+    """A person pressing Test or running curl gets the list; the app still hasn't."""
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    world.fake.on("GET", "/lists/152642", lambda r: (200, {
+        "id": 152642, "media_type": "anime", "updated_at": "u2",
+        "pagination": {"page": 1, "limit": 500, "total_items": 0, "total_pages": 1}, "items": []}))
+    world.service.feed("sonarr", 152642, from_app=False)
+    world.clock.now += 180
+    world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10, 10]
+
+
+def test_redelivery_gives_up_after_a_bounded_number_of_attempts(world):
+    world.start()
+    world.auto_fetch = False
+    world.activity, world.updated[152642] = "moved", "u2"
+    world.clock.now += 180
+    world.watcher.tick()
+    for _ in range(12):
+        world.clock.now += 180
+        world.watcher.tick()
+    from simkl_bridge.watch import MAX_REDELIVERIES
+    assert world.syncs(world.sonarr) == [10] * (1 + MAX_REDELIVERIES)
+    assert sum("giving up" in m for m in world.logs) == 1
