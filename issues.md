@@ -1,9 +1,9 @@
 # Issues
 
 ## Open
-- [ ] A new Sonarr list waited for Sonarr's scheduler (up to its next 5-minute run): Sonarr syncs a list on edit, not on add, and the watcher treated first sight as a baseline. Found by the end-to-end suite; fixed by syncing each definition on first sight (awaiting the 0.3.0 release) (2026-09-24)
-- [ ] `python -m simkl_bridge auth` crashed with a traceback when Simkl was unreachable; now a one-line error (awaiting 0.3.0) (2026-09-24)
-- [ ] The image carried pip, whose vendored msgpack and setuptools had fixable HIGH advisories; pip is now removed from the runtime image (awaiting 0.3.0) (2026-09-24)
+- [x] A new Sonarr list waited for Sonarr's scheduler (up to its next 5-minute run): Sonarr syncs a list on edit, not on add, and the watcher treated first sight as a baseline. Found by the end-to-end suite; fixed by syncing each definition on first sight (released in 0.3.0) (2026-09-24)
+- [x] `python -m simkl_bridge auth` crashed with a traceback when Simkl was unreachable; now a one-line error (released in 0.3.0) (2026-09-24)
+- [x] The image carried pip, whose vendored msgpack and setuptools had fixable HIGH advisories; pip is now removed from the runtime image (released in 0.3.0) (2026-09-24)
 - [ ] The watcher's startup log says `/sync/activities has no custom_lists.lists.all` when the field is present but `null`. Simkl leaves it `null` until the account's first list edit after the custom-list API went live. The watcher already handles it (hourly full checks until the stamp appears, then change-driven), but the message should say so rather than read like a fault (2026-09-23)
 - [ ] Simkl custom-list API is **beta**; response shape may change. Tests pin the documented shape as of 2026-09-23, not a live capture (2026-09-23)
 - [x] Not yet exercised against a real PRO token: the item/detail id field names come from the published OpenAPI examples (2026-09-23) — verified live 2026-09-23 against a VIP account: token refresh, `/lists/{id}` read and TVDB mapping all as documented

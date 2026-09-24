@@ -18,12 +18,12 @@
 - [x] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI (`b4bebf3ba486`, 2026-09-23)
 
 ## CI/CD and testing
-- [ ] Stand-in Simkl (`tests/support/fake_simkl.py`) and `SIMKL_API_BASE`; integration tests run the real process over HTTP
-- [ ] End-to-end suite against real Sonarr/Radarr (stable, develop, URL base), on every change and weekly
-- [ ] Container smoke test and Trivy scan; image drops pip (its vendored packages were the only HIGH findings)
-- [ ] Soak with fault injection: 4 min per change, 60 min nightly
-- [ ] Release workflow: tag-verified, amd64 + arm64, `:latest`/`:X.Y.Z`/`:X.Y`, GitHub Release with generated notes; `main` publishes `:edge`; Dependabot
-- [ ] Branch protection on `main` requiring the checks
+- [x] Stand-in Simkl (`tests/support/fake_simkl.py`) and `SIMKL_API_BASE`; integration tests run the real process over HTTP
+- [x] End-to-end suite against real Sonarr/Radarr (stable, develop, URL base), on every change and weekly
+- [x] Container smoke test and Trivy scan; image drops pip (its vendored packages were the only HIGH findings)
+- [x] Soak with fault injection: 4 min per change, 60 min nightly
+- [x] Release workflow: tag-verified, amd64 + arm64, `:latest`/`:X.Y.Z`/`:X.Y`, GitHub Release with generated notes; `main` publishes `:edge`; Dependabot
+- [x] Branch protection on `main`: lint, tests (3.11–3.13), container, soak and the stable e2e legs required; develop-build e2e informational
 
 ## Later
 - [ ] Drop the tvdb lookup for Sonarr once v5 (imdbId in Custom List) reaches the `develop` image
