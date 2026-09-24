@@ -17,6 +17,14 @@
 - [ ] README rewritten for people looking to use Simkl custom lists with Sonarr/Radarr; GitHub Release per version
 - [x] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI (`b4bebf3ba486`, 2026-09-23)
 
+## CI/CD and testing
+- [ ] Stand-in Simkl (`tests/support/fake_simkl.py`) and `SIMKL_API_BASE`; integration tests run the real process over HTTP
+- [ ] End-to-end suite against real Sonarr/Radarr (stable, develop, URL base), on every change and weekly
+- [ ] Container smoke test and Trivy scan; image drops pip (its vendored packages were the only HIGH findings)
+- [ ] Soak with fault injection: 4 min per change, 60 min nightly
+- [ ] Release workflow: tag-verified, amd64 + arm64, `:latest`/`:X.Y.Z`/`:X.Y`, GitHub Release with generated notes; `main` publishes `:edge`; Dependabot
+- [ ] Branch protection on `main` requiring the checks
+
 ## Later
 - [ ] Drop the tvdb lookup for Sonarr once v5 (imdbId in Custom List) reaches the `develop` image
 - [ ] Reopen Radarr#10787 / file the Sonarr equivalent citing the new `/lists` API

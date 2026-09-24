@@ -1,0 +1,34 @@
+name: soak
+
+# An hour of the real bridge process under sustained Simkl faults (429, 503,
+# dropped connections, slow responses, tokens expiring every ~40 s) and
+# constant list edits. Fails on any partial, mixed or empty answer, any edit
+# not delivered to the app, memory or thread growth, or a traceback.
+on:
+  schedule:
+    - cron: '43 3 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Duration in minutes
+        default: '60'
+      fault_rate:
+        description: Share of Simkl requests that fail
+        default: '0.2'
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - run: python tests/soak/soak.py --minutes "${MINUTES}" --fault-rate "${FAULT_RATE}"
+        env:
+          MINUTES: ${{ inputs.minutes || '60' }}
+          FAULT_RATE: ${{ inputs.fault_rate || '0.2' }}

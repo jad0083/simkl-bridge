@@ -119,9 +119,13 @@ State is kept per (app, list definition), not per Simkl list. Otherwise a
 list feeding both apps would be marked done for one while the other was down.
 A pass counts only if it completes: a failed list read, a rejected sync, or an
 app coming back from being unreachable makes the next tick check again. The
-activity change is consumed only by a complete pass. A list seen for the
-first time is checked immediately, whatever the activity stamp says, so its
-first edit is not missed. Timing uses a monotonic clock. Disabled definitions
+activity change is consumed only by a complete pass. A list definition
+seen for the first time is synced immediately. Sonarr syncs a list when it is
+edited but not when it is added (Radarr does both), and after a restart
+nothing records what changed while the bridge was down, so one sync per
+definition settles both. The end-to-end suite found the Sonarr behaviour; the
+source confirms it (`ImportListUpdatedHandler` handles
+`ProviderUpdatedEvent` only). Timing uses a monotonic clock. Disabled definitions
 and lists outside `BRIDGE_LISTS` are never watched.
 
 Watcher failures are logged and retried next tick, and never touch serving.
@@ -152,3 +156,21 @@ CI runs the tests on every push and pull request. On `main` it publishes
 `ghcr.io/jad0083/simkl-bridge:<short-sha>`. The tag names a commit so that a
 deployment pinning tag and digest records exactly which code it runs. The
 base image and every action are pinned by digest or commit.
+
+## Testing strategy
+
+- **Unit tests** drive each module through a scripted transport and assert on
+  exactly what was sent.
+- **Integration tests** start the real process (`python -m simkl_bridge
+  serve`) against `tests/support/fake_simkl.py`. That's a standalone stand-in
+  implementing Simkl's documented quirks: silent `limit` and `page` clamping,
+  `200 []` for unknown catalog ids, `200 premium_only` for free accounts, one
+  live access token per grant, and a list-activity stamp that stays `null`
+  until the first edit.
+- **The end-to-end suite** runs real Sonarr and Radarr containers and does
+  what a user does through their APIs. The apps themselves validate the
+  bridge's JSON when a list is saved, and titles must actually be added.
+- **The soak** holds the real process under sustained faults and churn, and
+  checks invariants rather than examples. It fails on any answer that isn't
+  exactly some real version of the list, any edit not delivered within a
+  bound, resource growth, or a traceback.

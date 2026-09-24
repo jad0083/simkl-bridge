@@ -1,6 +1,8 @@
 # simkl-bridge: Simkl custom lists for Sonarr and Radarr
 
-[![build](https://github.com/jad0083/simkl-bridge/actions/workflows/image.yml/badge.svg)](https://github.com/jad0083/simkl-bridge/actions/workflows/image.yml)
+[![ci](https://github.com/jad0083/simkl-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/jad0083/simkl-bridge/actions/workflows/ci.yml)
+[![e2e](https://github.com/jad0083/simkl-bridge/actions/workflows/e2e.yml/badge.svg)](https://github.com/jad0083/simkl-bridge/actions/workflows/e2e.yml)
+[![soak](https://github.com/jad0083/simkl-bridge/actions/workflows/soak.yml/badge.svg)](https://github.com/jad0083/simkl-bridge/actions/workflows/soak.yml)
 [![image](https://img.shields.io/badge/ghcr.io-jad0083%2Fsimkl--bridge-blue?logo=docker&logoColor=white)](https://github.com/jad0083/simkl-bridge/pkgs/container/simkl-bridge)
 ![python](https://img.shields.io/badge/python-3.13-blue?logo=python&logoColor=white)
 ![dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
@@ -20,7 +22,11 @@ Sonarr and Radarr to sync the moment a list changes.
 - **Anime aware:** series, OVAs and specials go to Sonarr; anime films go to Radarr.
 - **Safe:** read-only against Simkl. It never serves an empty or partial list,
   so it can't make your \*arr drop titles.
-- **Tiny:** Python standard library only, one non-root container, no database.
+- **Tiny:** Python standard library only, one non-root container (amd64 and
+  arm64), no database.
+- **Tested end to end:** every change runs against real Sonarr and Radarr
+  containers, plus an hour-long fault-injection soak every night. See
+  [Testing](#testing).
 
 ---
 
@@ -184,9 +190,12 @@ goes:
 ### 3. Test, then save
 
 **Test** should pass. If it fails, the message says why (see
-[Troubleshooting](#troubleshooting)). Saving syncs the list straight away.
-From then on it stays in sync by itself, and there's nothing to change on
-the bridge.
+[Troubleshooting](#troubleshooting)). Radarr syncs a new list as soon as it's
+saved. Sonarr only does that when a list is *edited*, so a new Sonarr list
+waits for its next scheduled run, or at most about 3 minutes with
+[fast syncs](#fast-syncs-new-titles-in-minutes) on, since the bridge syncs
+every list it hasn't seen before. From then on it stays in sync by itself, and
+there's nothing to change on the bridge.
 
 ## Fast syncs: new titles in minutes
 
@@ -226,9 +235,10 @@ In testing, a show added on simkl.com appeared in Sonarr **18 seconds** later.
 
 **What it does automatically:**
 - **Finds your lists by itself.** Every Sonarr *Custom List* or Radarr
-  *Custom Lists* entry whose URL points at the bridge is watched. When you
-  add a new list in Sonarr/Radarr, it's picked up within minutes, with
-  nothing to configure.
+  *Custom Lists* entry whose URL points at the bridge is watched. A list you
+  add later is found and synced within about 3 minutes, with nothing to
+  configure. After a restart, each list is synced once, to catch up on
+  anything that changed while the bridge was down.
 - **Syncs only what changed,** in only the apps using that list. Disabled
   lists are left alone.
 - **Retries until it succeeds.** If Simkl or an app is unreachable, the change
@@ -241,10 +251,6 @@ In testing, a show added on simkl.com appeared in Sonarr **18 seconds** later.
 - **Simkl turns on the "last changed" stamp after your first list edit.** On
   a brand-new setup, own-list changes are caught by the hourly full check
   until you edit any list once. After that it's minutes.
-- **Add titles first, then the list.** When you add a list to Sonarr/Radarr,
-  the app syncs it immediately, and the bridge records that state within 3
-  minutes. An edit made inside that short window waits for the app's regular
-  6 h / 12 h check.
 - **API keys are admin keys.** Neither app offers a read-only key. Keep them in
   your secrets like the Simkl token. The bridge only ever sends them to the
   URL you configured and never logs them. Leave them unset if you prefer the
@@ -265,13 +271,20 @@ In testing, a show added on simkl.com appeared in Sonarr **18 seconds** later.
 | `BRIDGE_DATA_DIR` | no | `/data` | Where the access token and ID cache live (mode `0600`) |
 | `BRIDGE_PORT` | no | `8080` | Listening port |
 | `SIMKL_CLIENT_SECRET` | no | | Only for a *server*-type Simkl app (not recommended) |
+| `SIMKL_API_BASE` | no | `https://api.simkl.com` | For testing against a stand-in Simkl |
 
 **Endpoints:** `GET /sonarr/<list id>` (Sonarr Custom List JSON with
 `tvdbId`), `GET /radarr/<list id>` (Radarr Custom Lists JSON with the TMDb
 `id`), and `GET /healthz`.
 
-**Images:** `ghcr.io/jad0083/simkl-bridge:latest`, a version tag such as
-`:v0.2.1`, or the exact commit `:<12-char sha>`, which is best for pinning.
+**Images** (`linux/amd64` and `linux/arm64`, e.g. a Raspberry Pi 4/5):
+
+| Tag | What it is |
+|---|---|
+| `:latest` | The latest release |
+| `:0.3.0`, `:0.3` | A release, or the newest patch of a minor version |
+| `:edge` | The newest build of `main`, which passed every check |
+| `:<12-char commit>` | One exact build: pin this, with its digest, for reproducible deployments |
 
 ## Troubleshooting
 
@@ -331,16 +344,42 @@ list minimum.
 - Sonarr 4.x needs a TVDB id, and Radarr a TMDb id. Titles Simkl can't map are
   skipped and logged.
 
+## Testing
+
+Every pull request and push to `main` runs:
+
+| Check | What it proves |
+|---|---|
+| **Unit and integration tests** on Python 3.11, 3.12 and 3.13 | The logic, plus the real bridge process over real HTTP against a stand-in Simkl that mimics Simkl's quirks (silent page clamping, `premium_only`, expiring tokens) |
+| **Container smoke test** | The image runs as non-root, rejects bad config with a clear message, becomes healthy, works with a read-only root filesystem, and never logs a token |
+| **Vulnerability scan** (Trivy) | No fixable HIGH or CRITICAL issues in the image |
+| **End to end** against real Sonarr and Radarr: stable builds, develop builds, and under a URL base | Titles are actually added; a list edit reaches both apps through a targeted sync within 2 minutes; a movie list offered to Sonarr is refused with a reason; with Sonarr's list cleaning on, a Simkl outage unmonitors nothing |
+| **Soak**: 4 minutes per change, 60 minutes nightly | Under sustained Simkl faults (429s, 503s, dropped connections, slow replies, tokens expiring every ~40 s) and constant list edits: never a partial, mixed or empty answer; every edit delivered; no memory or thread growth; no crash |
+
+The end-to-end suite also runs weekly, so a new Sonarr or Radarr release that
+breaks the integration is caught even when nothing here has changed.
+
+**Tested with:** Sonarr 4.0.20, Radarr 6.4.4 (and their develop builds at the
+time of each run).
+
 ## Development
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install pytest
-.venv/bin/pytest            # runs against a scripted Simkl; no account needed
+.venv/bin/pytest                               # unit + integration; no account needed
 docker build -t simkl-bridge:dev .
+tests/container/smoke.sh simkl-bridge:dev      # container checks
+PYTHON=.venv/bin/python tests/e2e/run.sh       # real Sonarr/Radarr (Docker, internet)
+.venv/bin/python tests/soak/soak.py --minutes 5
 ```
 
-[`docs/design.md`](docs/design.md) explains the design decisions and why.
-Issues and pull requests are welcome.
+`tests/support/fake_simkl.py` is a standalone stand-in for Simkl's API; point
+the bridge at it with `SIMKL_API_BASE`. [`docs/design.md`](docs/design.md)
+explains the design decisions and why. Issues and pull requests are welcome.
+
+**Releasing:** bump `__version__` in `src/simkl_bridge/__init__.py`, merge,
+then push a tag `vX.Y.Z` on that commit. CI verifies the tag matches, runs
+everything, publishes the images and creates the GitHub Release.
 
 ---
 
