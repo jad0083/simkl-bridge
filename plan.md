@@ -13,6 +13,8 @@
 - [x] Watch Simkl activity and request single-list syncs from Sonarr/Radarr on change, skipping their 6/12-hour Custom List floors (0.2.1; verified live: an edit on simkl.com reached Sonarr as an added series in 18 seconds)
 
 ## Release
+- [ ] Images also tagged `latest` and `v<version>`, with OCI labels linking the ghcr package to the repo
+- [ ] README rewritten for people looking to use Simkl custom lists with Sonarr/Radarr; GitHub Release per version
 - [x] Public repo `jad0083/simkl-bridge` and first image published to ghcr.io by CI (`b4bebf3ba486`, 2026-09-23)
 
 ## Later
