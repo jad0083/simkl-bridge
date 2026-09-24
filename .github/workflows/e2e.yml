@@ -1,0 +1,45 @@
+name: e2e
+
+# Real Sonarr and Radarr containers, the bridge built from this commit, and a
+# fake Simkl: titles must actually be added, list edits must arrive through
+# targeted syncs within two minutes, and a Simkl outage must never unmonitor
+# anything. Weekly as well, so a new Sonarr or Radarr release that breaks the
+# integration is caught even when this repository hasn't changed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  e2e:
+    name: e2e (sonarr ${{ matrix.sonarr }}, radarr ${{ matrix.radarr }}${{ matrix.url_base && format(', URL base {0}', matrix.url_base) || '' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {sonarr: latest, radarr: latest, url_base: ''}
+          - {sonarr: develop, radarr: develop, url_base: ''}
+          - {sonarr: latest, radarr: latest, url_base: '/arr'}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - run: tests/e2e/run.sh
+        env:
+          SONARR_TAG: ${{ matrix.sonarr }}
+          RADARR_TAG: ${{ matrix.radarr }}
+          URL_BASE: ${{ matrix.url_base }}

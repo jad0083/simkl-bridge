@@ -1,0 +1,45 @@
+# End-to-end stack: real Sonarr and Radarr, the bridge built from this
+# checkout, and tests/support/fake_simkl.py standing in for api.simkl.com.
+# Driven by tests/e2e/run.sh; see tests/e2e/test_e2e.py for what is checked.
+name: simkl-bridge-e2e
+
+services:
+  fake-simkl:
+    image: python:3.13-slim
+    command: ["python", "/support/fake_simkl.py", "--port", "9000", "--refresh-token", "e2e-refresh"]
+    volumes:
+      - ../support:/support:ro
+    ports: ["127.0.0.1:19000:9000"]
+
+  simkl-bridge:
+    build: ../..
+    environment:
+      - SIMKL_CLIENT_ID=e2e-client
+      - SIMKL_REFRESH_TOKEN=e2e-refresh
+      - SIMKL_API_BASE=http://fake-simkl:9000
+      - SONARR_URL=http://sonarr:8989${URL_BASE:-}
+      - SONARR_API_KEY=e2e0sonarr0key000000000000000000
+      - RADARR_URL=http://radarr:7878${URL_BASE:-}
+      - RADARR_API_KEY=e2e0radarr0key000000000000000000
+      - BRIDGE_WATCH_INTERVAL=30
+      - BRIDGE_FULL_CHECK=600
+    tmpfs:
+      - /data:uid=10001,mode=0700
+    ports: ["127.0.0.1:18080:8080"]
+    depends_on: [fake-simkl]
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:${SONARR_TAG:-latest}
+    environment: [PUID=1000, PGID=1000, TZ=Etc/UTC]
+    volumes:
+      - ${E2E_DIR}/sonarr:/config
+      - ${E2E_DIR}/tv:/tv
+    ports: ["127.0.0.1:18989:8989"]
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:${RADARR_TAG:-latest}
+    environment: [PUID=1000, PGID=1000, TZ=Etc/UTC]
+    volumes:
+      - ${E2E_DIR}/radarr:/config
+      - ${E2E_DIR}/movies:/movies
+    ports: ["127.0.0.1:17878:7878"]

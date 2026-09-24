@@ -131,12 +131,12 @@ class Watcher:
             invalidated = False
             for arr, definition in where:
                 key = (arr.name, definition)
-                if key not in self._synced:
-                    # First sight: saving the list in the app already synced it.
-                    self._synced[key] = updated
+                # First sight counts as a change. Sonarr does not sync a list when it
+                # is added (only when edited), and after a restart nothing says what
+                # changed while the bridge was down; one sync per list settles both.
+                if key in self._synced and self._synced[key] == updated:
                     continue
-                if self._synced[key] == updated:
-                    continue
+                why = "changed" if key in self._synced else "first seen"
                 if not invalidated:
                     # The app fetches right after the trigger; it must not get the old copy.
                     self._service.invalidate(list_id)
@@ -144,12 +144,12 @@ class Watcher:
                 try:
                     arr.sync(definition)
                 except Exception as e:  # noqa: BLE001
-                    self._log(f"watch: list {list_id} changed; {arr.name} list #{definition} "
+                    self._log(f"watch: list {list_id} {why}; {arr.name} list #{definition} "
                               f"sync failed, will retry: {e}")
                     ok = False
                     continue
                 self._synced[key] = updated
-                self._log(f"watch: list {list_id} changed; {arr.name} list #{definition} sync requested")
+                self._log(f"watch: list {list_id} {why}; {arr.name} list #{definition} sync requested")
 
         # Only a complete pass consumes the activity change or the full check.
         self._retry = not ok
