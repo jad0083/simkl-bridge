@@ -41,10 +41,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests" / "support"))
+sys.path.insert(0, str(ROOT / "src"))
 import fake_simkl
 
+from simkl_bridge.watch import REDELIVER_AFTER
+
 TV, MOVIES = 501, 502
-DELIVERY_BOUND = 240          # watch interval 30s + retries under a 15% fault rate
+WATCH_INTERVAL = 30
+# An edit is found within one watch interval. If the app's fetch is then lost,
+# or fails on a Simkl fault, the sync is re-requested after REDELIVER_AFTER,
+# checked on the next tick. Allowing three such rounds bounds the worst case
+# the injected faults can produce without letting a real stall pass: the
+# nightly run saw two consecutive failures take 350s.
+DELIVERY_BOUND = WATCH_INTERVAL + 3 * (REDELIVER_AFTER + WATCH_INTERVAL)
 RSS_GROWTH_LIMIT_KB = 30_000
 THREAD_LIMIT = 60
 
@@ -207,7 +216,7 @@ def main():
     data = pathlib.Path(os.environ.get("SOAK_DATA", f"/tmp/simkl-bridge-soak-{os.getpid()}"))
     env = dict(os.environ, SIMKL_CLIENT_ID="soak-client", SIMKL_REFRESH_TOKEN="soak-refresh",
                SIMKL_API_BASE=f"http://127.0.0.1:{simkl_port}", BRIDGE_PORT=str(bridge_port),
-               BRIDGE_DATA_DIR=str(data), BRIDGE_MIN_REFRESH="5", BRIDGE_WATCH_INTERVAL="30",
+               BRIDGE_DATA_DIR=str(data), BRIDGE_MIN_REFRESH="5", BRIDGE_WATCH_INTERVAL=str(WATCH_INTERVAL),
                BRIDGE_FULL_CHECK="120", PYTHONPATH=str(ROOT / "src"),
                SONARR_URL=arrs["sonarr"][1], SONARR_API_KEY="soak-key",
                RADARR_URL=arrs["radarr"][1], RADARR_API_KEY="soak-key")
@@ -321,7 +330,9 @@ def main():
         "minutes": a.minutes, "fault_rate": a.fault_rate, "edits": len(edits),
         "delivered": len(latencies),
         "latency_s": {"p50": round(statistics.median(latencies), 1) if latencies else None,
-                      "max": round(max(latencies), 1) if latencies else None},
+                      "p95": round(sorted(latencies)[int(0.95 * (len(latencies) - 1))], 1) if latencies else None,
+                      "max": round(max(latencies), 1) if latencies else None,
+                      "bound": DELIVERY_BOUND},
         "polls": polls, "simkl": {k: state.stats[k] for k in ("requests", "faults", "refreshes", "unauthorised")},
         "rss_kb": {"first": samples[0][1] if samples else None, "last": samples[-1][1] if samples else None},
         "threads_max": max((s[2] for s in samples), default=None),
