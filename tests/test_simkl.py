@@ -192,3 +192,53 @@ def test_pacing_leaves_headroom_under_the_limit(tmp_path, fake, clock):
     for n in range(1, 11):
         c.detail_ids("tv", n)
     assert (clock.now - t0) / 9 == pytest.approx(0.12, abs=1e-6)
+
+
+# --- dropped connections are transient, like 429/5xx; timeouts are not retried ---------------
+
+def _flaky(fake, failures):
+    """A transport that raises each of `failures` in turn, then defers to `fake`."""
+    calls = {"n": 0}
+
+    def transport(method, url, **kw):
+        calls["n"] += 1
+        if failures:
+            raise failures.pop(0)
+        return fake(method, url, **kw)
+    return transport, calls
+
+
+def test_a_dropped_connection_is_retried(tmp_path, fake, clock):
+    """The soak found it: one reset in a multi-page read failed the whole read, so a
+    25-item list failed 60% of reads at a 5% drop rate."""
+    import http.client
+    fake.json("GET", "/tv/5", {"ids": {"tvdb": "1"}})
+    transport, calls = _flaky(fake, [ConnectionResetError("reset by peer"),
+                                     http.client.RemoteDisconnected("closed without response")])
+    tokens = TokenStore(tmp_path / "t.json", refresh_token="r", client_id="cid", transport=fake, clock=clock)
+    c = Simkl("cid", tokens, transport=transport, clock=clock, sleep=clock.sleep)
+    t0 = clock.now
+    assert c.detail_ids("tv", 5) == {"tvdb": "1"}
+    assert calls["n"] == 3
+    assert clock.now - t0 >= 1 + 2
+
+
+def test_persistent_drops_still_fail_after_the_retries(tmp_path, fake, clock):
+    transport, calls = _flaky(fake, [ConnectionResetError("reset")] * 10)
+    tokens = TokenStore(tmp_path / "t.json", refresh_token="r", client_id="cid", transport=fake, clock=clock)
+    c = Simkl("cid", tokens, transport=transport, clock=clock, sleep=clock.sleep)
+    with pytest.raises(SimklError, match="reset"):
+        c.detail_ids("tv", 5)
+    assert calls["n"] == 4
+
+
+def test_a_timeout_is_not_retried(tmp_path, fake, clock):
+    """Four 30-second waits would outlast the app's own wait for the bridge's answer."""
+    import urllib.error
+    for exc in (TimeoutError("timed out"), urllib.error.URLError(TimeoutError("timed out"))):
+        transport, calls = _flaky(fake, [exc, exc, exc])
+        tokens = TokenStore(tmp_path / "t.json", refresh_token="r", client_id="cid", transport=fake, clock=clock)
+        c = Simkl("cid", tokens, transport=transport, clock=clock, sleep=clock.sleep)
+        with pytest.raises(SimklError, match="timed out"):
+            c.detail_ids("tv", 5)
+        assert calls["n"] == 1
