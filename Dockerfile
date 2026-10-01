@@ -4,9 +4,16 @@ FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc4243
 WORKDIR /app
 COPY src/simkl_bridge /app/simkl_bridge
 
+# Debian's security updates are applied at build time: fixes for the base
+# image's system libraries (openssl, pcre2, ...) land in Debian days before
+# the upstream Python image is rebuilt with them.
+RUN apt-get update \
+ && apt-get -y upgrade --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # Unprivileged, with state (access token, id cache) in a volume it owns.
-# pip is removed: the bridge needs only the standard library, and pip's
-# vendored packages are the image's only known vulnerabilities.
+# pip is removed: the bridge needs only the standard library, and pip vendors
+# packages with their own advisories.
 RUN useradd --system --uid 10001 --no-create-home bridge \
  && mkdir /data && chown bridge /data && chmod 0700 /data \
  && rm -rf /usr/local/lib/python3.*/site-packages/pip* /usr/local/lib/python3.*/ensurepip \
