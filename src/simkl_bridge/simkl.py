@@ -20,6 +20,11 @@ TRANSIENT = {429, 500, 502, 503, 504}
 CATALOG = {"tv": "tv", "anime": "anime", "movie": "movies"}
 
 
+def _timed_out(e):
+    """True for a timeout, which urllib raises bare or wrapped in URLError."""
+    return isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+
+
 class SimklError(Exception):
     pass
 
@@ -127,7 +132,14 @@ class Simkl:
                 r = self._transport("GET", f"{self._base}{path}?{urllib.parse.urlencode(query)}",
                                     headers=headers, timeout=30)
             except (OSError, http.client.HTTPException) as e:
-                raise SimklError(f"{path}: {e}") from e
+                # A dropped or refused connection is as transient as a 503, and one
+                # reset must not fail a whole multi-page read. A timeout is not
+                # retried: four 30-second waits would outlast the app's own wait.
+                delay = None if _timed_out(e) else next(retries, None)
+                if delay is None:
+                    raise SimklError(f"{path}: {e}") from e
+                self._sleep(delay)
+                continue
             if r.status == 401 and auth and not refreshed:
                 refreshed = True
                 self._tokens.invalidate(token)
