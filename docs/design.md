@@ -54,7 +54,12 @@ proves complete:
 - the item count equals `total_items`
 - the list is within the API's 10,000-item read cap
 
-`429` and `5xx` are retried after 1, 2 and 4 s. Requests are paced at 0.12 s,
+`429` and `5xx` are retried after 1, 2 and 4 s, and so is a dropped or
+refused connection: one reset must not fail a whole multi-page read. The
+nightly soak found the gap. With its 2-item pages, a 25-item list failed 60%
+of full reads at a 5% drop rate, and 0% once drops were retried. A timeout is
+not retried, because four 30-second waits would outlast the app's own wait
+for the bridge's answer. Requests are paced at 0.12 s,
 under Simkl's 10 GET/s.
 
 **An item with no mappable id is left out, and logged.** For example, a show
