@@ -107,7 +107,8 @@ class Watcher:
         self._retry = False
         self._unreachable = set()
         self._warned_no_activity = False
-        self._pending = {}         # (app, definition) -> (arr, list id, serves at request, requested at, attempts)
+        # (app, definition) -> (arr, list id, serves at request, refusals at request, requested at, attempts)
+        self._pending = {}
 
     def tick(self):
         targets, recovered = self._discover()
@@ -152,6 +153,7 @@ class Watcher:
                     invalidated = True
                 # Counted before the request: an app can fetch before sync() returns.
                 seen = self._service.serves(arr.name, list_id)
+                refused = self._service.refusals(arr.name, list_id)[0]
                 try:
                     arr.sync(definition)
                 except Exception as e:  # noqa: BLE001
@@ -160,7 +162,7 @@ class Watcher:
                     ok = False
                     continue
                 self._synced[key] = updated
-                self._pending[key] = (arr, list_id, seen, self._clock(), 0)
+                self._pending[key] = (arr, list_id, seen, refused, self._clock(), 0)
                 self._log(f"watch: list {list_id} {why}; {arr.name} list #{definition} sync requested")
 
         # Only a complete pass consumes the activity change or the full check.
@@ -180,9 +182,18 @@ class Watcher:
         that app since the request.
         """
         now = self._clock()
-        for key, (arr, list_id, seen, at, attempts) in list(self._pending.items()):
+        for key, (arr, list_id, seen, refused, at, attempts) in list(self._pending.items()):
             if self._service.serves(arr.name, list_id) > seen:
                 del self._pending[key]
+                continue
+            count, reason = self._service.refusals(arr.name, list_id)
+            if count > refused:
+                # The app fetched and the bridge refused it: wrong app, unknown or
+                # private list, BRIDGE_LISTS. Re-requesting can't help.
+                del self._pending[key]
+                self._log(f"watch: {arr.name} list #{key[1]} was refused by the bridge: {reason}. "
+                          f"Fix that list's settings in {arr.name}; it won't be re-requested until "
+                          f"the list changes")
                 continue
             if now - at < REDELIVER_AFTER:
                 continue
@@ -199,7 +210,7 @@ class Watcher:
                 self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
                           f"the sync request, and asking again failed, will retry: {e}")
                 continue
-            self._pending[key] = (arr, list_id, seen, now, attempts + 1)
+            self._pending[key] = (arr, list_id, seen, refused, now, attempts + 1)
             self._log(f"watch: list {list_id}; {arr.name} list #{key[1]} not fetched since "
                       f"the sync request, asking again")
 

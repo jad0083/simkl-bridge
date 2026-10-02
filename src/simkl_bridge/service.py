@@ -9,9 +9,16 @@ import time
 from dataclasses import dataclass
 
 from .feeds import ENTRY, NEEDS, target_of
+from .simkl import ListNotFound, PremiumRequired, PrivateList
 
 # What each list media_type can feed.
 SERVES = {"tv": {"sonarr"}, "movies": {"radarr"}, "anime": {"sonarr", "radarr"}}
+# Within this many seconds of the last check, a list is served from cache with no
+# Simkl call: enough to absorb an app's burst (save, then test, within ~2 s).
+# After it, each request costs one small read of updated_at. It was 15 minutes,
+# which served a just-edited list stale: create a list, Test (empty), add a
+# title, Test again -- still empty.
+DEFAULT_MIN_REFRESH = 10
 # A list is fully re-read at least this often, whatever updated_at says.
 MAX_AGE = 86400
 
@@ -22,6 +29,10 @@ class Forbidden(Exception):
 
 class WrongTarget(Exception):
     pass
+
+
+# Answers that won't change until someone fixes a setting -- unlike a Simkl outage.
+REFUSALS = (WrongTarget, Forbidden, ListNotFound, PrivateList, PremiumRequired)
 
 
 @dataclass
@@ -35,7 +46,8 @@ class CachedList:
 
 
 class ListService:
-    def __init__(self, simkl, resolver, clock=time.time, min_refresh=900, allowed=None, log=None):
+    def __init__(self, simkl, resolver, clock=time.time, min_refresh=DEFAULT_MIN_REFRESH, allowed=None,
+                 log=None):
         self._simkl = simkl
         self._resolver = resolver
         self._clock = clock
@@ -43,10 +55,26 @@ class ListService:
         self._allowed = allowed
         self._lists = {}
         self._serves = {}          # (target, list id) -> successful answers so far
+        self._refusals = {}        # (target, list id) -> (refusals so far, latest reason)
         self._lock = threading.Lock()
         self._log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
 
     def feed(self, target, list_id, from_app=True):
+        try:
+            return self._feed(target, list_id, from_app)
+        except REFUSALS as e:
+            # Not transient: the same request will be refused until someone changes a setting.
+            with self._lock:
+                count, _ = self._refusals.get((target, list_id), (0, ""))
+                self._refusals[(target, list_id)] = (count + 1, str(e))
+            raise
+
+    def refusals(self, target, list_id):
+        """(how many requests for this list were refused, the latest reason)."""
+        with self._lock:
+            return self._refusals.get((target, list_id), (0, ""))
+
+    def _feed(self, target, list_id, from_app):
         if not self.allows(list_id):
             raise Forbidden(f"list {list_id} is not in BRIDGE_LISTS")
         with self._lock:

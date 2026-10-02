@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 MAX_READABLE = 10000
+ME = 1                      # the account the token belongs to
 
 
 def now_iso():
@@ -145,7 +146,7 @@ def make_handler(state):
                 a = state.activity
                 return self._send(200, {"all": a, "custom_lists": {"lists": {"all": a, "regular": a}}})
             if path == "/users/settings":
-                return self._send(200, {"account": {"id": 1, "type": "vip"}})
+                return self._send(200, {"account": {"id": ME, "type": "vip"}})
             m = re.fullmatch(r"/lists/(\d+)", path)
             if m:
                 return self._list(int(m.group(1)), q)
@@ -156,6 +157,11 @@ def make_handler(state):
                 lst = state.lists.get(list_id)
                 if lst is None:
                     return self._send(404, {"error": "not_found", "code": 404})
+                # Private lists are readable only by their owner and collaborators.
+                # The token belongs to account ME.
+                if (lst.get("privacy") == "private" and lst.get("owner", ME) != ME
+                        and ME not in lst.get("collaborators", [])):
+                    return self._send(403, {"error": "private_list"})
                 snapshot = dict(lst, items=list(lst["items"]))
             limit = max(1, min(int(q.get("limit", 50)), 500, state.faults["page_max"]))
             total = len(snapshot["items"])
@@ -166,6 +172,7 @@ def make_handler(state):
             return self._send(200, {
                 "id": list_id, "name": f"list {list_id}", "media_type": snapshot["media_type"],
                 "type": snapshot.get("type", "regular"), "updated_at": snapshot["updated_at"],
+                "privacy": snapshot.get("privacy", "public"), "user": {"id": snapshot.get("owner", ME)},
                 "pagination": {"page": page, "limit": limit, "total_items": total, "total_pages": pages},
                 "items": items})
 
@@ -194,6 +201,9 @@ def make_handler(state):
                     with state.lock:
                         state.lists[list_id] = {"media_type": body["media_type"],
                                                 "type": body.get("type", "regular"),
+                                                "privacy": body.get("privacy", "public"),
+                                                "owner": body.get("owner", ME),
+                                                "collaborators": body.get("collaborators", []),
                                                 "updated_at": now_iso(), "items": body.get("items", [])}
                     return self._send(200, {"ok": True})
                 if list_id not in state.lists:

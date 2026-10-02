@@ -47,14 +47,16 @@ def show(n, tvdb=None):
 
 
 @pytest.fixture
-def stack(tmp_path):
+def stack(tmp_path, request):
+    """The real process against the fake Simkl. Tests that exercise caching ask for
+    the deployed defaults with indirect parametrization; the rest disable the cache."""
+    overrides = getattr(request, "param", {"BRIDGE_MIN_REFRESH": "0"})
     simkl_port, bridge_port = free_port(), free_port()
     srv, state = fake_simkl.serve(simkl_port, "it-refresh", 7 * 86400, host="127.0.0.1")
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     env = dict(os.environ, SIMKL_CLIENT_ID="it-client", SIMKL_REFRESH_TOKEN="it-refresh",
                SIMKL_API_BASE=f"http://127.0.0.1:{simkl_port}", BRIDGE_PORT=str(bridge_port),
-               BRIDGE_DATA_DIR=str(tmp_path / "data"), BRIDGE_MIN_REFRESH="0",
-               PYTHONPATH=str(ROOT / "src"))
+               BRIDGE_DATA_DIR=str(tmp_path / "data"), PYTHONPATH=str(ROOT / "src"), **overrides)
     for k in ("SONARR_URL", "SONARR_API_KEY", "RADARR_URL", "RADARR_API_KEY"):
         env.pop(k, None)
     proc = subprocess.Popen([sys.executable, "-m", "simkl_bridge", "serve"], env=env,
@@ -138,3 +140,36 @@ def test_under_a_fault_storm_the_answer_is_whole_or_an_error(stack):
             assert isinstance(body, dict) and body.get("error")
             outcomes["error"] += 1
     assert outcomes["whole"] > 0, "retries never got a whole list through"
+
+
+@pytest.mark.parametrize("stack", [{}], indirect=True)
+def test_with_deployed_defaults_a_list_edit_reaches_the_next_request(stack):
+    """Create an empty list, let the app read it, add a title, read again: the title
+    must be there. Every other test here disables the cache, which is how a 15-minute
+    stale window shipped unnoticed."""
+    base, admin, _, _ = stack
+    call(f"{admin}/list/11", {"media_type": "tv", "items": []})
+    assert call(f"{base}/sonarr/11") == (200, [])
+    call(f"{admin}/list/11/add", show(1, 4242))
+    time.sleep(11)                       # past the burst window, well inside the old 15 minutes
+    assert call(f"{base}/sonarr/11") == (200, [{"title": "Show 1", "tvdbId": 4242, "imdbId": "tt0000001"}])
+
+
+@pytest.mark.parametrize("privacy,owner,collaborators,expect", [
+    ("private", 1, [], 200),            # your own private list: the bridge reads it as you
+    ("private", 99, [1], 200),          # someone else's private list you collaborate on
+    ("unlisted", 99, [], 200),          # someone else's unlisted list, by id
+    ("public", 99, [], 200),
+    ("private", 99, [], 403),           # someone else's private list: refused, with the reason
+])
+def test_list_privacy(stack, privacy, owner, collaborators, expect):
+    base, admin, _, _ = stack
+    call(f"{admin}/list/12", {"media_type": "tv", "privacy": privacy, "owner": owner,
+                              "collaborators": collaborators, "items": [show(1, 77)]})
+    status, body = call(f"{base}/sonarr/12")
+    assert status == expect, body
+    if expect == 200:
+        assert body == [{"title": "Show 1", "tvdbId": 77, "imdbId": "tt0000001"}]
+    else:
+        assert "private" in body["error"] and "owner" in body["error"]
+

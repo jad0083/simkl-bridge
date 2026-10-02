@@ -3,7 +3,8 @@
 List items usually carry the ids already; a catalog lookup happens only when
 the one an arr needs is missing. A mapping that exists never changes in
 practice, so positive results never expire. A missing one is re-checked after
-a week, because Simkl does fill them in.
+a day, because Simkl does fill them in (and new titles are often unmapped
+at first).
 """
 import json
 import threading
@@ -11,7 +12,7 @@ import time
 
 from .http import write_private
 
-NEGATIVE_TTL = 7 * 86400
+NEGATIVE_TTL = 86400
 
 
 class IdCache:
