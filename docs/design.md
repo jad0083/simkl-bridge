@@ -70,19 +70,25 @@ is correct, and the negative lookup is cached like a positive one.
 **Ids come from the list item first.** A lookup happens only when the id the
 target arr needs is missing. **Lookups are cached on disk and never expire.** Simkl ids map to
 TVDB/TMDb/IMDb ids that don't change in practice. Negative results expire
-after 7 days, because Simkl does add missing mappings. Lookups use the
+after a day, because Simkl does add missing mappings, and new titles are often
+unmapped at first. Lookups use the
 Cloudflare-cached catalog endpoints (`/tv/{id}`, `/anime/{id}`,
 `/movies/{id}`). These need only the `client_id` and must be sent **without** an
 `Authorization` header.
 
 **List reads are gated by `updated_at`.** A request within `BRIDGE_MIN_REFRESH`
-seconds (default 900) of the last successful fetch is served from cache.
-After that, one `limit=1` read of the list compares `updated_at` and pulls the
-whole list only if it moved. The gate is skipped, and the whole list re-read,
-in three cases: `updated_at` is missing, the list is an `auto` list (a saved
-filter whose contents move on their own), or the last full read is more than a
-day old. `/sync/activities` would be cheaper, but it only
-tracks the token owner's own lists, and a PRO token can read other users'
+seconds (default 10) of the last check is served from cache with no Simkl call,
+which absorbs an app's burst (save then Test, about 2 s apart). After that, one
+`limit=1` read compares `updated_at`, and the whole list is pulled only if it
+moved. The window was 15 minutes until 0.3.3, which served a just-edited list
+stale. The first-time flow (create a list, Test while it's empty, add a title,
+Test again) got the cached empty answer for up to 15 minutes. The
+integration tests had disabled the cache, so they never exercised the
+default; one now runs with the deployed defaults. The gate is skipped, and the
+whole list re-read, in three cases: `updated_at` is missing, the list is an
+`auto` list (a saved filter whose contents move on their own), or the last
+full read is more than a day old. `/sync/activities` would be cheaper, but it
+only tracks the token owner's own lists, and a PRO token can read other users'
 public lists by id.
 
 **The bridge is the sole owner of its OAuth grant.** AUTH V2 access tokens last
@@ -151,6 +157,19 @@ because an app can fetch before the request returns. A request still unmet
 after two minutes is sent again on the next tick. That costs no Simkl call.
 The nightly soak found this: one edit in a 25%-fault run was accepted and
 never fetched.
+
+**A refusal is not re-requested.** If the app's fetch was refused (the list is
+the wrong type for that app, the list ID is unknown, the list is someone else's
+private list, `BRIDGE_LISTS` excludes it, or the account isn't PRO/VIP),
+asking again can't help. The service counts refusals per (app, list) the same
+way it counts successful serves. The watcher drops the pending sync and logs
+once, naming the list and the reason. A Simkl outage is different: it is
+transient, and still re-requested.
+
+**Privacy.** The bridge reads lists as the account that signed in. So all of
+that account's lists work whatever their privacy, as do lists it collaborates
+on. Simkl answers `403 private_list` for anyone else's private list, and the
+bridge passes that on as a `403` saying so, not a generic `502`.
 
 Watcher failures are logged and retried next tick, and never touch serving.
 Arr API keys go only in the `X-Api-Key` header. Error responses are not
