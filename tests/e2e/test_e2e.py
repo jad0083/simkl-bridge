@@ -193,3 +193,46 @@ def test_zz_real_apps_fetches_confirm_their_syncs():
         line for line in logs.splitlines() if "watch:" in line)
     assert "[Sonarr/" in logs and "[Radarr/" in logs, "expected fetches identified as Sonarr and Radarr"
 
+
+
+def radarr_list_body(ready, list_id):
+    return custom_list(RADARR, "RadarrListImport", "url", f"http://simkl-bridge:8080/radarr/{list_id}",
+                       enabled=True, enableAuto=True, monitor="movieOnly",
+                       minimumAvailability="released", rootFolderPath="/movies",
+                       qualityProfileId=ready["radarr_profile"], searchOnAdd=False)
+
+
+def test_a_title_added_after_an_empty_test_is_seen_by_the_next_test(ready):
+    """The first-time flow that failed in production (2026-10-02): create a list,
+    press Test while it's empty, add a title on Simkl, press Test again. The second
+    Test must see the title; it used to get a cached empty list for up to 15 min."""
+    api("POST", f"{ADMIN}/list/300", {"media_type": "movies", "items": []})
+    body = radarr_list_body(ready, 300)
+    status, data = arr(RADARR, "POST", "/importlist/test", body, expect=None)
+    assert status >= 400 and "No results" in json.dumps(data), (status, data)
+    api("POST", f"{ADMIN}/list/300/add", INCEPTION)
+    time.sleep(11)                                   # past the bridge's 10 s burst window
+    status, data = arr(RADARR, "POST", "/importlist/test", body, expect=None)
+    assert status < 400, f"Test still failing after a title was added: {status} {data}"
+
+
+def test_how_the_apps_treat_an_empty_list(ready):
+    """What the README tells users, checked against the real apps.
+
+    Radarr refuses to save an empty list with a *warning* ("No results were
+    returned"), which a confirmed save overrides; Sonarr accepts it. If either
+    changes, the weekly run flags it and the README needs updating."""
+    api("POST", f"{ADMIN}/list/301", {"media_type": "movies", "items": []})
+    body = radarr_list_body(ready, 301)
+    status, data = arr(RADARR, "POST", "/importlist", body, expect=None)
+    assert status == 400 and all(e.get("isWarning") for e in data), (status, data)
+    assert "No results" in json.dumps(data)
+    status, _ = arr(RADARR, "POST", "/importlist?forceSave=true", dict(body, name="e2e empty 301"), expect=None)
+    assert status == 201
+    api("POST", f"{ADMIN}/list/302", {"media_type": "tv", "items": []})
+    sbody = custom_list(SONARR, "CustomImport", "baseUrl", "http://simkl-bridge:8080/sonarr/302",
+                        enableAutomaticAdd=True, shouldMonitor="all", rootFolderPath="/tv",
+                        qualityProfileId=ready["sonarr_profile"], seriesType="standard",
+                        seasonFolder=True, monitorNewItems="all")
+    assert arr(SONARR, "POST", "/importlist/test", sbody, expect=None)[0] == 200
+    assert arr(SONARR, "POST", "/importlist", sbody, expect=None)[0] == 201
