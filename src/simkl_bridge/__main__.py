@@ -7,7 +7,7 @@ import threading
 from .auth_cli import DeviceFlowError, device_flow
 from .resolve import IdCache, Resolver
 from .server import make_server
-from .service import ListService
+from .service import DEFAULT_MIN_REFRESH, ListService
 from .simkl import Simkl
 from .tokens import TokenStore
 from .watch import ArrClient, Watcher
@@ -59,7 +59,7 @@ def serve():
     simkl = Simkl(client_id, tokens, base=base)
     allowed = os.environ.get("BRIDGE_LISTS", "").replace(",", " ").split()
     service = ListService(simkl, Resolver(simkl, IdCache(data / "ids.json")),
-                          min_refresh=int(os.environ.get("BRIDGE_MIN_REFRESH", "900")),
+                          min_refresh=int(os.environ.get("BRIDGE_MIN_REFRESH", DEFAULT_MIN_REFRESH)),
                           allowed={int(x) for x in allowed} or None)
     arrs = arrs_from_env(os.environ, strict=True)
     if arrs:

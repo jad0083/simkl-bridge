@@ -1,4 +1,4 @@
 """Serve Simkl custom lists to Sonarr and Radarr."""
 
 APP_NAME = "simkl-bridge"
-__version__ = "0.3.2"
+__version__ = "0.3.3"

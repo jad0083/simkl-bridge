@@ -80,7 +80,7 @@ def test_unknown_list_is_not_found(tmp_path, fake, clock):
 
 def test_private_list_is_an_error(tmp_path, fake, clock):
     fake.json("GET", "/lists/7", {"error": "private_list"}, status=403)
-    with pytest.raises(SimklError, match="private_list"):
+    with pytest.raises(SimklError, match="private"):
         client(tmp_path, fake, clock).list_meta(7)
 
 
@@ -242,3 +242,11 @@ def test_a_timeout_is_not_retried(tmp_path, fake, clock):
         with pytest.raises(SimklError, match="timed out"):
             c.detail_ids("tv", 5)
         assert calls["n"] == 1
+
+
+def test_someone_elses_private_list_is_a_clear_refusal(tmp_path, fake, clock):
+    """Simkl answers 403 private_list to anyone but the owner and collaborators."""
+    from simkl_bridge.simkl import PrivateList
+    fake.json("GET", "/lists/7", {"error": "private_list"}, status=403)
+    with pytest.raises(PrivateList, match="private"):
+        client(tmp_path, fake, clock).list_meta(7)

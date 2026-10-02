@@ -143,3 +143,10 @@ def test_only_the_app_itself_counts_as_a_delivery(serve, agent, counts):
     req = urllib.request.Request(base + "/sonarr/7", headers={"User-Agent": agent})
     urllib.request.urlopen(req, timeout=5).read()
     assert seen == [counts]
+
+
+def test_a_private_list_is_a_403_with_its_reason(serve):
+    from simkl_bridge.simkl import PrivateList
+    _, base = serve(PrivateList("list 7 is private: only its owner and collaborators can read it"))
+    code, _, body = get(base + "/radarr/7")
+    assert code == 403 and "private" in body["error"]

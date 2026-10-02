@@ -17,7 +17,8 @@ simkl-bridge is a small self-hosted Docker service. It reads your
 the *Custom List* format Sonarr and Radarr already import. It can also tell
 Sonarr and Radarr to sync the moment a list changes.
 
-- **Any custom list:** yours or anyone's public list; TV, movies or anime.
+- **Any custom list:** all of yours (public, unlisted or private), and anyone
+  else's public or unlisted list; TV, movies or anime.
 - **Fast syncs:** new titles reach Sonarr/Radarr in about 3 minutes, not 6–12 hours.
 - **Anime aware:** series, OVAs and specials go to Sonarr; anime films go to Radarr.
 - **Safe:** read-only against Simkl. It never serves an empty or partial list,
@@ -258,8 +259,15 @@ Repeat these steps for each Simkl list.
    - **An Anime list can mix series and films.** The bridge splits it for you.
 3. Add titles from any title's page with **Add to list**.
 
-You can also use **someone else's list**, as long as it's **public** or
-**unlisted**. Private lists can only be read by their owner.
+**Privacy:** the bridge reads lists *as you* (the account you signed in with in
+Part 1), so:
+
+| List | Works? |
+|---|---|
+| Your own list: public, unlisted **or private** | ✅ |
+| Someone else's **public** or **unlisted** list | ✅ (use its ID) |
+| Someone else's **private** list that you collaborate on | ✅ |
+| Someone else's **private** list you're not on | ❌ Test reports *"the list is private"* |
 
 #### Step 2: Copy the list ID
 
@@ -278,9 +286,14 @@ ID, e.g. `152642`.
 
 **How anime is split:** each anime title has a subtype on Simkl. **Movie** goes
 to Radarr; **TV, OVA, ONA and special** go to Sonarr. A title only ever reaches
-one app. If you add an anime list to Radarr and it has no films yet, Radarr
-simply gets an empty list, which is normal, and films you add later arrive
-automatically.
+one app. An anime list with no films yet is empty as far as Radarr is
+concerned; see the next note.
+
+**Empty lists:** Sonarr accepts an empty list without complaint. Radarr shows
+the warning *"No results were returned from your import list"* when you test
+or save one. It's only a warning, so the list can still be saved, and films
+you add later arrive automatically. Or add one film first, and it saves
+without a warning.
 
 #### Step 4a: Add it to Sonarr
 
@@ -320,7 +333,9 @@ automatically.
 
 1. Press **Test**. It should succeed. If it doesn't, the message says why
    (see [Troubleshooting](#troubleshooting)). The usual causes are a movie list
-   pointed at Sonarr (or the reverse) and a wrong list ID.
+   pointed at Sonarr (or the reverse), a wrong list ID, and Radarr's *"No
+   results"* warning for a list that's still empty. Added a title a moment ago?
+   Test again: from 0.3.3 an edit shows up on the next Test (after 10 seconds).
 2. Press **Save**.
 3. To see exactly what the app will receive:
    ```sh
@@ -419,7 +434,7 @@ sequenceDiagram
 | `BRIDGE_WATCH_INTERVAL` | no | `180` | Seconds between change checks (minimum 30) |
 | `BRIDGE_FULL_CHECK` | no | `3600` | Seconds between full checks, which catch other people's lists; `900` is a good value if you use them |
 | `BRIDGE_LISTS` | no | all | Comma-separated list IDs this bridge may serve |
-| `BRIDGE_MIN_REFRESH` | no | `900` | Seconds a list is served from cache before re-checking Simkl |
+| `BRIDGE_MIN_REFRESH` | no | `10` | Seconds a list is served from cache without asking Simkl whether it changed (absorbs an app's burst of requests) |
 | `BRIDGE_DATA_DIR` | no | `/data` | Where the access token and ID cache live (mode `0600`) |
 | `BRIDGE_PORT` | no | `8080` | Listening port |
 | `SIMKL_CLIENT_SECRET` | no | | Only for a *server*-type Simkl app (not recommended) |
@@ -447,9 +462,11 @@ What **Test** in Sonarr/Radarr (or `curl http://simkl-bridge:8080/sonarr/<id>`) 
 | `404 … not found` | No list with that ID | Check the number in the list's URL |
 | `400 … holds movies; point radarr at …` | A movie list was added to Sonarr, or a TV list to Radarr | Use the other app |
 | `502 … not Simkl PRO or VIP` | The signed-in account isn't PRO/VIP | Custom lists need PRO/VIP |
-| `502 … HTTP 403 private_list` | The list is private | Ask the owner to make it public or unlisted |
+| `403 … the list is private; only its owner and its collaborators can read it` | Someone else's private list, and you're not a collaborator (your own private lists always work) | Ask the owner to make it public or unlisted, or to add you as a collaborator |
 | `502 … token refresh failed` | The refresh token was revoked or is from another app | Re-run the `auth` step |
 | `403 … not in BRIDGE_LISTS` | You restricted which lists are served | Add the ID to `BRIDGE_LISTS` |
+| **Test** says *"No results were returned from your import list"* | The list is empty on Simkl (Radarr warns about empty lists; Sonarr doesn't). Or it was until a moment ago: before 0.3.3 the bridge could serve a just-edited list from a 15-minute cache | Add a title on simkl.com and Test again; from 0.3.3 an edit shows up on the next Test (after 10 seconds). Or save anyway: it's a warning, and titles added later arrive automatically |
+| Log: `… list #N was refused by the bridge: …` | That Sonarr/Radarr list can't be served as configured: wrong app for the list's type, an unknown list ID, someone else's private list, or not in `BRIDGE_LISTS` | Fix that list's settings in the app, using the reason in the log line. The bridge stops re-requesting it until the list changes |
 | A title never appears | Simkl has no TVDB (Sonarr) or TMDb (Radarr) id for it | `docker logs simkl-bridge` names each skipped title |
 | Log: `… still hasn't fetched after 5 re-requests; giving up` | The app accepted the sync request but its fetch keeps failing or never arrives | Check that app's own log (*System → Logs*) for the error. Its fetch must come from the app itself: a proxy that rewrites its `User-Agent` hides it from the bridge |
 | Log: `sonarr unreachable` / `radarr unreachable` | `SONARR_URL` / `RADARR_URL` is wrong, or the bridge isn't on their network | Use the container name and internal port, plus any URL base; see [Step 5](#step-5-add-the-bridge-to-compose) |
@@ -472,8 +489,13 @@ empty list: the bridge returns an error instead.
 No. Simkl only gives PRO and VIP accounts access to custom lists through its API.
 
 **Can I use a friend's list, or a public list I found?**
-Yes, if it's public or unlisted. Use its ID like any other list. Its changes
-arrive within your `BRIDGE_FULL_CHECK` interval.
+Yes, if it's public or unlisted, or private with you as a collaborator. Use its
+ID like any other list. Its changes arrive within your `BRIDGE_FULL_CHECK`
+interval.
+
+**Do private lists work?**
+Your own do, always: the bridge reads lists as you. Someone else's private
+list works only if they've added you as a collaborator.
 
 **How does anime work?**
 An anime list can feed both apps. Series, OVAs, ONAs and specials go to

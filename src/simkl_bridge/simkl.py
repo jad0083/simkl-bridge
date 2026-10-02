@@ -33,6 +33,10 @@ class PremiumRequired(SimklError):
     pass
 
 
+class PrivateList(SimklError):
+    pass
+
+
 class ListNotFound(SimklError):
     pass
 
@@ -155,6 +159,9 @@ class Simkl:
     def _check(path, r):
         body = r.json()
         error = body.get("error") if isinstance(body, dict) else None
+        if r.status == 403 and error == "private_list":
+            raise PrivateList(f"{path}: the list is private; only its owner and its collaborators can "
+                              f"read it, and the bridge reads as the Simkl account it signed in with")
         if r.status != 200:
             raise SimklError(f"{path}: HTTP {r.status} {error or ''}".strip())
         if error == "premium_only":

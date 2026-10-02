@@ -99,16 +99,16 @@ def test_ids_are_looked_up_once_and_survive_a_restart(tmp_path, fake, clock):
     assert json.loads((tmp_path / "ids.json").read_text())
 
 
-def test_a_missing_mapping_is_retried_after_a_week(tmp_path, fake, clock):
+def test_a_missing_mapping_is_retried_after_a_day(tmp_path, fake, clock):
     serve_list(fake, [show(1)])
     serve_tv_ids(fake, {1: None})
     svc = build(tmp_path, fake, clock, min_refresh=0)
     svc.feed("sonarr", 7)
-    clock.now += 86400
+    clock.now += 3600
     svc.feed("sonarr", 7)
     assert len(fake.calls("/tv/1")) == 1
     serve_tv_ids(fake, {1: "101"})
-    clock.now += 7 * 86400
+    clock.now += 86400
     assert svc.feed("sonarr", 7) == [{"title": "S1", "tvdbId": 101, "imdbId": "tt1"}]
 
 
@@ -227,3 +227,36 @@ def test_lookups_already_made_survive_a_failed_build(tmp_path, fake, clock):
     with pytest.raises(SimklError):
         build(tmp_path, fake, clock).feed("sonarr", 7)
     assert "tv:1" in json.loads((tmp_path / "ids.json").read_text())
+
+
+def test_with_default_settings_an_edit_is_seen_on_the_apps_next_request(tmp_path, fake, clock):
+    """The reported bug: list created, Radarr's Test read it empty, a film was added
+    on Simkl, and Radarr's next Test -- 18 s after the edit, 3.5 min after the first
+    read -- still got the cached empty list. The cache window was 15 minutes."""
+    tokens = TokenStore(tmp_path / "token.json", refresh_token="simkl_rt_R", client_id="cid",
+                        transport=fake, clock=clock)
+    simkl = Simkl("cid", tokens, transport=fake, clock=clock, sleep=clock.sleep)
+    svc = ListService(simkl, Resolver(simkl, IdCache(tmp_path / "ids.json", clock=clock), clock=clock),
+                      clock=clock)                       # defaults, as deployed
+    state = serve_list(fake, [], media_type="tv", updated="created")
+    assert svc.feed("sonarr", 7) == []
+    clock.now += 205
+    state["items"], state["updated"] = [show(1)], "edited"
+    serve_tv_ids(fake, {1: "101"})
+    clock.now += 18
+    assert [e["tvdbId"] for e in svc.feed("sonarr", 7)] == [101]
+
+
+def test_a_burst_of_requests_is_still_served_from_cache(tmp_path, fake, clock):
+    """Radarr saves and tests a list within a couple of seconds; one Simkl read covers both."""
+    tokens = TokenStore(tmp_path / "token.json", refresh_token="simkl_rt_R", client_id="cid",
+                        transport=fake, clock=clock)
+    simkl = Simkl("cid", tokens, transport=fake, clock=clock, sleep=clock.sleep)
+    svc = ListService(simkl, Resolver(simkl, IdCache(tmp_path / "ids.json", clock=clock), clock=clock),
+                      clock=clock)
+    serve_list(fake, [show(1)])
+    serve_tv_ids(fake, {1: "101"})
+    svc.feed("sonarr", 7)
+    clock.now += 2
+    svc.feed("sonarr", 7)
+    assert len(fake.calls("/lists/7")) == 1

@@ -6,12 +6,12 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .service import Forbidden, WrongTarget
-from .simkl import ListNotFound, SimklError
+from .simkl import ListNotFound, PrivateList, SimklError
 
 ROUTE = re.compile(r"^/(sonarr|radarr)/([0-9]+)$")
 
 # Most specific first: ListNotFound is a SimklError.
-ERRORS = [(ListNotFound, 404), (Forbidden, 403), (WrongTarget, 400), (SimklError, 502)]
+ERRORS = [(ListNotFound, 404), (PrivateList, 403), (Forbidden, 403), (WrongTarget, 400), (SimklError, 502)]
 
 
 def make_server(service, host, port):

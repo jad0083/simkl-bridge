@@ -411,3 +411,21 @@ def test_redelivery_gives_up_after_a_bounded_number_of_attempts(world):
     from simkl_bridge.watch import MAX_REDELIVERIES
     assert world.syncs(world.sonarr) == [10] * (1 + MAX_REDELIVERIES)
     assert sum("giving up" in m for m in world.logs) == 1
+
+
+def test_a_list_the_bridge_refuses_is_not_re_requested(world):
+    """A Sonarr list pointed at a movie list (or an unknown or someone else's private
+    list) can never be fetched. Re-requesting it five times helps nobody; say why once."""
+    world.fake.on("GET", "/lists/7", lambda r: (200, {
+        "id": 7, "media_type": "movies", "updated_at": world.updated[7],
+        "pagination": {"page": 1, "limit": int(r["query"].get("limit", 50)), "total_items": 0,
+                       "total_pages": 1}, "items": []}))
+    world.sonarr.json("GET", "/api/v3/importlist", sonarr_lists("http://simkl-bridge:8080/sonarr/7"))
+    world.watcher.tick()                    # first sight: sync requested; the app's fetch is refused
+    for _ in range(4):
+        world.clock.now += 180
+        world.watcher.tick()
+    assert world.syncs(world.sonarr) == [10]
+    refused = [m for m in world.logs if "refused" in m]
+    assert len(refused) == 1 and "sonarr list #10" in refused[0] and "radarr" in refused[0]
+
